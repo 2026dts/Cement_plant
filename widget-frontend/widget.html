@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<!--
+  Widget page - Architecture v5, Feature A ("Cupola-Native Inline Value Overlay")
+
+  Usage: widget.html?id=iron_ore
+
+  Deliberately minimal: no card, no border, no background box. Just a single
+  line of text ("iron_ore: 52 gm") so it visually blends with Cupola's own
+  floating icon labels when this page is embedded in a hotspot.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Widget</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+    }
+    #label {
+      display: inline-block;
+      color: #ffffff;
+      font-size: 20px;
+      font-weight: 600;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+      white-space: nowrap;
+      padding: 2px 6px;
+    }
+  </style>
+</head>
+<body>
+  <span id="label">--</span>
+
+  <script src="js/ws-client.js"></script>
+  <script>
+    // Point these at your backend (Architecture v5, Section 4).
+    const API_BASE = "http://localhost:4000";
+    const WS_URL   = "ws://localhost:4000/ws";
+
+    const params = new URLSearchParams(window.location.search);
+    const itemId = params.get("id");
+    const labelEl = document.getElementById("label");
+
+    function render(itemId, value, unit) {
+      const shown = value === null || value === undefined ? "--" : value;
+      labelEl.textContent = `${itemId}: ${shown}${unit ? " " + unit : ""}`;
+    }
+
+    if (!itemId) {
+      labelEl.textContent = "missing ?id=";
+    } else {
+      // Initial snapshot so the label isn't blank before the first WS message.
+      fetch(`${API_BASE}/api/item/${itemId}`)
+        .then((r) => r.json())
+        .then((data) => render(itemId, data.value, data.unit))
+        .catch(() => {});
+
+      // Live updates, scoped to just this item (Architecture v5, Section 4.2).
+      connectWidgetSocket(WS_URL, itemId, (data) => {
+        render(itemId, data.value, data.unit);
+      });
+    }
+  </script>
+</body>
+</html>

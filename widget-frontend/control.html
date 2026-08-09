@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<!--
+  Control page - works with BOTH Cupola hotspot styles, since either could be
+  in use:
+
+  STYLE A - "embed" hotspot (like embedding a YouTube URL - Cupola keeps this
+  page visible in place, the way a video stays visible):
+    control.html?id=crusher
+    Shows a green ON button and a red OFF button, live-highlighted to match
+    the actuator's actual current state. Tap either button to send the
+    command. This is the URL to paste for an embed-style hotspot.
+
+  STYLE B - "link" hotspot (clicking a Cupola icon just opens a URL, which
+  fires immediately with no page interaction):
+    control.html?id=crusher&action=on
+    control.html?id=crusher&action=off
+    Fires the command the instant the page loads and shows a short
+    confirmation line - no buttons shown. Paste one URL per icon (green icon
+    -> ...&action=on, red icon -> ...&action=off).
+
+  Both styles call the exact same backend routes - see API_DOCUMENTATION.md.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Control</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+    }
+    #status {
+      display: inline-block;
+      color: #ffffff;
+      font-size: 20px;
+      font-weight: 700;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+      padding: 2px 6px;
+    }
+    #buttons {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .power-btn {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+      opacity: 0.45;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .power-btn:active {
+      transform: scale(0.92);
+    }
+    .power-btn.active {
+      opacity: 1;
+    }
+    .power-btn.on {
+      background: #22c55e;
+    }
+    .power-btn.off {
+      background: #ef4444;
+    }
+    .power-btn svg {
+      width: 22px;
+      height: 22px;
+      stroke: #ffffff;
+      stroke-width: 2.4;
+      fill: none;
+    }
+    #label {
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 600;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+      text-align: center;
+      margin-top: 2px;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script>
+    // Point these at your backend - see API_DOCUMENTATION.md.
+    const API_BASE = "http://localhost:4000";
+    const WS_URL   = "ws://localhost:4000/ws";
+
+    const params = new URLSearchParams(window.location.search);
+    const itemId = params.get("id");
+    const action = params.get("action"); // "on" | "off" | absent
+    const root = document.getElementById("root");
+
+    const powerIcon = `<svg viewBox="0 0 24 24"><path d="M12 2v8" stroke-linecap="round"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0" stroke-linecap="round"/></svg>`;
+
+    if (!itemId) {
+      root.innerHTML = `<span id="status">missing ?id=</span>`;
+    } else if (action === "on" || action === "off") {
+      // STYLE B: link-type hotspot - fire immediately, no buttons.
+      root.innerHTML = `<span id="status">sending...</span>`;
+      fetch(`${API_BASE}/api/item/${itemId}/action/${action}`)
+        .then((r) => r.text())
+        .then((text) => { document.getElementById("status").textContent = text; })
+        .catch(() => { document.getElementById("status").textContent = "command failed"; });
+    } else {
+      // STYLE A: embed-type hotspot - persistent ON/OFF buttons, live-highlighted.
+      root.innerHTML = `
+        <div id="buttons">
+          <button class="power-btn on" id="btnOn" aria-label="Turn on">${powerIcon}</button>
+          <button class="power-btn off" id="btnOff" aria-label="Turn off">${powerIcon}</button>
+          <span id="label">${itemId}</span>
+        </div>
+      `;
+
+      const btnOn = document.getElementById("btnOn");
+      const btnOff = document.getElementById("btnOff");
+
+      function setActive(state) {
+        // state is "on", "off", or null/unknown (nothing highlighted yet)
+        btnOn.classList.toggle("active", state === "on");
+        btnOff.classList.toggle("active", state === "off");
+      }
+
+      function sendCommand(cmd) {
+        setActive(cmd); // optimistic - live update below will confirm/correct
+        fetch(`${API_BASE}/api/item/${itemId}/action/${cmd}`).catch(() => {});
+      }
+
+      btnOn.addEventListener("click", () => sendCommand("on"));
+      btnOff.addEventListener("click", () => sendCommand("off"));
+
+      // Initial snapshot so the correct button is highlighted before any
+      // WebSocket message arrives.
+      fetch(`${API_BASE}/api/item/${itemId}`)
+        .then((r) => r.json())
+        .then((data) => setActive(data.value))
+        .catch(() => {});
+
+      // Live updates, scoped to just this item.
+      let socket;
+      function connect() {
+        socket = new WebSocket(WS_URL);
+        socket.onopen = () => socket.send(JSON.stringify({ type: "subscribe", item_id: itemId }));
+        socket.onmessage = (event) => {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "update" && msg.item_id === itemId) {
+            setActive(msg.value);
+          }
+        };
+        socket.onclose = () => setTimeout(connect, 2000);
+        socket.onerror = () => socket.close();
+      }
+      connect();
+    }
+  </script>
+</body>
+</html>
