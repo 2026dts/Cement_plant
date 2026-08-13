@@ -146,7 +146,22 @@ DHT clinDht(CLIN_DHT_PIN, DHT_TYPE);
 DHT coolerDht(COOLER_DHT_PIN, DHT_TYPE);
 DHT preheatDht(PREHEAT_DHT_PIN, DHT_TYPE);
 
-#define VIBRATION_SENSOR_PIN 27  // digital vibration sensor (e.g. SW-420), separate from vibration_motor above
+#define VIBRATION_SENSOR_PIN 27  // (removed - replaced below with analog sensor on ADC pin 34)
+
+// Analog vibration sensor configuration (replaces the old digital placeholder)
+// Wiring:
+//   Module "-" -> ESP32 GND
+//   Module "+" -> ESP32 3V3
+//   Module "S" -> ESP32 GPIO34 (ADC1_CH6)
+
+const int sensorPin = 34;
+const unsigned long sampleWindow = 50; // 50ms window to fully cover motor rotation cycles
+
+// Calibration Constants tuned for a 5V Coreless Vibration Motor
+const float V_REF = 3.3;
+const float ADC_RES = 4095.0;
+const float REALISTIC_SENSITIVITY = 0.62; // Tuned in Volts per g
+const int MOTOR_OFF_BASELINE = 0;
 
 // ============================================================================
 // ------------------------------- MQTT CLIENT --------------------------------
@@ -305,11 +320,21 @@ void readAndPublishSensors() {
     Serial.println("[SENSOR] preheating_tower_dht read failed");
   }
 
-  int vib = digitalRead(VIBRATION_SENSOR_PIN);
-  publishValue("vibration_sensor", vib, "/8");
+  // Read analog vibration sensor over a short window and convert to g
+  unsigned long startMillis = millis();
+  int maxRawPeak = MOTOR_OFF_BASELINE;
+  while (millis() - startMillis < sampleWindow) {
+    int currentRaw = analogRead(sensorPin);
+    if (currentRaw > maxRawPeak) maxRawPeak = currentRaw;
+  }
+  int trueVibrationRaw = maxRawPeak - MOTOR_OFF_BASELINE;
+  if (trueVibrationRaw < 0) trueVibrationRaw = 0;
+  float peakVoltage = (trueVibrationRaw * V_REF) / ADC_RES;
+  float vibrationG = peakVoltage / REALISTIC_SENSITIVITY;
+  publishValue("vibration_sensor", vibrationG, "g");
 
-  Serial.printf("[SENSOR] clin: %.1fC %.0f%%  cooler: %.1fC %.0f%%  preheat: %.1fC %.0f%%  vib: %d\n",
-                ct, ch, ot, oh, pt, ph, vib);
+  Serial.printf("[SENSOR] clin: %.1fC %.0f%%  cooler: %.1fC %.0f%%  preheat: %.1fC %.0f%%  vib: %.3fg\n",
+                ct, ch, ot, oh, pt, ph, vibrationG);
 }
 
 // ============================================================================
@@ -328,7 +353,8 @@ void setup() {
   clinDht.begin();
   coolerDht.begin();
   preheatDht.begin();
-  pinMode(VIBRATION_SENSOR_PIN, INPUT);
+  // Configure ADC attenuation for the analog vibration sensor
+  analogSetAttenuation(ADC_11db);
 
   initWiFi();
   mqtt.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);

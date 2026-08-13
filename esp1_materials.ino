@@ -102,7 +102,7 @@ MaterialFeed materials[5] = {
   { "limestone",    22, 27 },
   { "clay",         23, 26 },
   { "iron_ore",      5, 14 },
-  { "sand",         16, 13 },
+  { "sand",         15, 13 },
   { "raw_material", 19, 25 },
 };
 constexpr uint8_t NUM_MATERIALS = 5;
@@ -141,20 +141,29 @@ bool reconnectWiFiIfNeeded() {
 }
 
 // ============================================================================
-// ----------------------------- TARE (non-blocking) --------------------------
+// ------------------------------ SENSOR READING ------------------------------
 // ============================================================================
-// Called every loop() tick. Each channel tares itself the instant its own
-// HX711 reports is_ready() == true — independent of every other channel, and
-// without ever blocking setup()/boot.
-void serviceTaring() {
-  for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
-    MaterialFeed &m = materials[i];
-    if (!m.tared && m.loadCell.is_ready()) {
-      m.loadCell.tare();
-      m.tared = true;
-      Serial.printf("[TARE] %s tared and ready\n", m.item_id);
+// ============================================================================
+// ------------------------------ SENSOR READING ------------------------------
+// ============================================================================
+float readLoadCellFast(MaterialFeed &m, uint8_t samples = 1) {
+  if (m.loadCell.is_ready()) {
+    float w = m.loadCell.get_units(samples); // 1 sample = INSTANT reading (0ms delay)
+    if (w > -0.5f && w < 0.5f) {
+      w = 0.0f; // Soft safety clamp: zero-drift tracking
     }
+    return w;
   }
+  return m.lastWeight;
+}
+
+void publishValue(const char *item_id, float value, const char *unit) {
+  StaticJsonDocument<64> doc;
+  doc["value"] = value;
+  doc["unit"]  = unit;
+  char payload[64];
+  serializeJson(doc, payload);
+  mqtt.publish(topicValue(item_id).c_str(), payload);
 }
 
 // ============================================================================
@@ -171,30 +180,48 @@ void publishTargetStatus(MaterialFeed &m, const char *status) {
 void startDispense(MaterialFeed &m, float target) {
   m.targetGrams = target;
   m.dispensing  = true;
-  m.servo.write(SERVO_MAX_ANGLE);   // go straight to max and hold
-  Serial.printf("[DISPENSE] %s: target=%.1fg, servo -> MAX (%d) and holding\n",
+  m.servo.write(SERVO_MAX_ANGLE);   // Servo opens / moves to MAX position (140 deg)
+  Serial.printf("\n[DISPENSE START] %s: target=%.1fg, servo -> MAX (%d deg)\n",
                 m.item_id, target, SERVO_MAX_ANGLE);
   publishTargetStatus(m, "dispensing");
 }
 
 void stopDispense(MaterialFeed &m) {
   m.dispensing = false;
-  m.servo.write(SERVO_HOME_ANGLE);  // back to original position
-  Serial.printf("[DISPENSE] %s: target reached (%.1fg), servo back to home\n",
-                m.item_id, m.lastWeight);
+  m.servo.write(SERVO_HOME_ANGLE);  // Servo closes / returns to HOME position (30 deg)
+  Serial.printf("\n[DISPENSE STOP] %s: target reached (current=%.1fg, target=%.1fg), servo -> HOME (%d deg)\n",
+                m.item_id, m.lastWeight, m.targetGrams, SERVO_HOME_ANGLE);
   publishTargetStatus(m, "done");
+  publishValue(m.item_id, m.lastWeight, "g");
 }
 
-// Called every loop() iteration for every material. While dispensing, the
-// servo is already parked at SERVO_MAX_ANGLE (set once in startDispense) —
-// this just watches the weight and releases back to home on target reached.
-void updateDispenseLoop(MaterialFeed &m) {
-  if (!m.dispensing) return;
-
-  if (m.lastWeight >= m.targetGrams) {
-    stopDispense(m);
+// Dedicated ULTRA-FAST check for active dispensing hoppers.
+// Runs every single loop tick to detect target threshold INSTANTLY and close servo immediately.
+void checkDispensingFast() {
+  for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
+    MaterialFeed &m = materials[i];
+    if (m.dispensing) {
+      if (m.loadCell.is_ready()) {
+        m.lastWeight = readLoadCellFast(m, 1); // 1 sample for instant measurement
+        publishValue(m.item_id, m.lastWeight, "g");
+        Serial.printf("[DISPENSING FAST] %s: %.1fg / %.1fg\n", m.item_id, m.lastWeight, m.targetGrams);
+        if (m.lastWeight >= m.targetGrams) {
+          stopDispense(m);
+        }
+      }
+    }
   }
-  // else: keep holding at SERVO_MAX_ANGLE, nothing else to do this tick
+}
+
+// Background telemetry for idle hoppers
+void readAndPublishTelemetry() {
+  for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
+    MaterialFeed &m = materials[i];
+    if (m.dispensing) continue; // dispensing channels are handled instantly by checkDispensingFast()
+
+    m.lastWeight = readLoadCellFast(m, 1);
+    publishValue(m.item_id, m.lastWeight, "g");
+  }
 }
 
 // ============================================================================
@@ -208,7 +235,6 @@ MaterialFeed *materialForTopic(const String &topic) {
 }
 
 void mqttCallback(char *topic, byte *payload, unsigned int length) {
-  // Log incoming MQTT messages for debugging
   Serial.printf("[MQTT RX] %s -> %.*s\n", topic, length, (char *)payload);
   String topicStr(topic);
   MaterialFeed *m = materialForTopic(topicStr);
@@ -234,7 +260,6 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
 // ============================================================================
 bool mqttConnect() {
   Serial.printf("Connecting to Mosquitto (%s:%u)...\n", MQTT_BROKER_HOST, MQTT_BROKER_PORT);
-  // Use a unique client ID by appending the MAC address to avoid collisions
   String clientId = String(MQTT_CLIENT_ID) + "-" + WiFi.macAddress();
   const char *cid = clientId.c_str();
   bool ok;
@@ -266,42 +291,6 @@ void maintainMqttConnection() {
 }
 
 // ============================================================================
-// ------------------------------ SENSOR READING ------------------------------
-// ============================================================================
-float readLoadCell(HX711 &lc) {
-  if (lc.is_ready()) {
-    float w = lc.get_units(5);
-    if (w > -0.5 && w < 0.5) w = 0.0f; // small zero-drift clamp, same as reference
-    return w;
-  }
-  return 0.0f;
-}
-
-void publishValue(const char *item_id, float value, const char *unit) {
-  StaticJsonDocument<64> doc;
-  doc["value"] = value;
-  doc["unit"]  = unit;
-  char payload[64];
-  serializeJson(doc, payload);
-  mqtt.publish(topicValue(item_id).c_str(), payload);
-}
-
-void readAndPublishTelemetry() {
-  Serial.println("---------------------------------------------");
-  for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
-    MaterialFeed &m = materials[i];
-    if (!m.tared) {
-      Serial.printf("%s: waiting for tare...  ", m.item_id);
-      continue; // don't publish/act on a channel that hasn't tared yet
-    }
-    m.lastWeight = readLoadCell(m.loadCell);
-    publishValue(m.item_id, m.lastWeight, "g");
-    Serial.printf("%s: %.1fg%s  ", m.item_id, m.lastWeight, m.dispensing ? " (dispensing)" : "");
-  }
-  Serial.println();
-}
-
-// ============================================================================
 // ---------------------------------- SETUP -----------------------------------
 // ============================================================================
 void setup() {
@@ -315,28 +304,36 @@ void setup() {
   // ---- Step 2: MQTT broker next ----
   mqtt.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
   mqtt.setCallback(mqttCallback);
-  mqttConnect(); // first attempt here; maintainMqttConnection() keeps retrying in loop() if this fails
+  mqttConnect();
 
-  // ---- Step 3: load cells + servos, all channels back-to-back, NO blocking tare wait ----
+  // ---- Step 3: Initialize Servos and Load Cells ----
   for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
     MaterialFeed &m = materials[i];
 
-    Serial.printf("\nStarting %s...\n", m.item_id);
-    Serial.printf("DOUT = GPIO%d, SCK = GPIO%d\n", m.dout_pin, SHARED_SCK_PIN);
+    Serial.printf("\nInitializing %s...\n", m.item_id);
+    Serial.printf("DOUT = GPIO%d, Servo = GPIO%d, SCK = GPIO%d\n", m.dout_pin, m.servo_pin, SHARED_SCK_PIN);
 
-    m.loadCell.begin(m.dout_pin, SHARED_SCK_PIN); // common SCK, own DOUT
+    m.loadCell.begin(m.dout_pin, SHARED_SCK_PIN);
     m.loadCell.set_scale(CALIBRATION_FACTOR);
 
     m.servo.attach(m.servo_pin);
-    m.servo.write(SERVO_HOME_ANGLE); // every feeder starts at its home position
-
-    Serial.printf("%s initialization complete (tare will happen in background)\n", m.item_id);
+    m.servo.write(SERVO_HOME_ANGLE); // Every feeder starts at resting home position (30 deg)
   }
 
-  Serial.println("\nAll channels initialized. Taring will complete independently per");
-  Serial.println("channel in the background (loop) as each load cell becomes ready.");
-  Serial.println("Keep all load cells empty and still until each one reports [TARE] done.");
-  Serial.println("=== Setup complete ===\n");
+  // ---- Step 4: Calibrated Tare (2 second settling delay as per reference code) ----
+  Serial.println("\n------------------------------------------------");
+  Serial.println("Taring scale... Keep all scales completely empty!");
+  Serial.println("------------------------------------------------");
+  delay(2000);
+
+  for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
+    MaterialFeed &m = materials[i];
+    m.loadCell.tare();
+    m.tared = true;
+    Serial.printf("[TARE] %s tared and ready!\n", m.item_id);
+  }
+
+  Serial.println("\n=== Setup complete ===\n");
 }
 
 // ============================================================================
@@ -353,18 +350,12 @@ void loop() {
     mqtt.loop(); // processes incoming target/cmd messages via mqttCallback()
   }
 
-  // Non-blocking per-channel tare: each material tares itself the instant
-  // its own HX711 goes is_ready(), independent of every other channel.
-  serviceTaring();
+  // 1. FAST PRIORITY DISPENSE CHECK (runs every loop tick for instant servo response!)
+  checkDispensingFast();
 
-  // For every material currently dispensing: hold servo at max until target
-  // weight is reached, then release that one servo back to home.
-  for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
-    updateDispenseLoop(materials[i]);
-  }
-
+  // 2. Periodic background telemetry for idle channels
   unsigned long now = millis();
-  if (now - lastTelemetryMs >= TELEMETRY_INTERVAL_MS) {
+  if (now - lastTelemetryMs >= 150UL) { // 150ms telemetry refresh rate
     lastTelemetryMs = now;
     readAndPublishTelemetry();
   }
