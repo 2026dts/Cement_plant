@@ -5,9 +5,9 @@ Everything needed to run the platform end-to-end on the current hardware:
 - **ESP32-1**: 5 load cells (common SCK) + 5 servos — limestone, clay, iron_ore,
   sand, raw_material — each pair does closed-loop dispensing to a target weight.
 - **ESP32-2**: 16-channel relay board (2x8), 13 channels wired — crusher (gangs
-  3 N20 motors), conveyor_1-4, clin, heater, heat_blower, cooler_fan,
-  clin_cooler_fan, vibration_motor, ball_mill_1, ball_mill_2 — plus 2x DHT11
-  and 1x vibration sensor (read-only, not relay-controlled).
+  3 N20 motors), conveyor_1-4, clin, clin_heater, heat_blower, cooler_fan,
+  preheating_tower_heater, vibration_motor, ball_mill_1, ball_mill_2 — plus 3x
+  DHT11 and 1x vibration sensor (read-only, not relay-controlled).
 - Both boards talk directly to your local Mosquitto broker — no cloud, no
   ThingsBoard.
 
@@ -90,9 +90,9 @@ If the widget pages aren't on `localhost:4000` for the backend, edit the
 ## 4. Configure Cupola
 
 Paste the widget-frontend URLs into each hotspot's embed field, exactly as
-you would a YouTube or ThingsBoard link today. See the hotspot -> URL mapping
-table in Architecture v5, Section 6, for the full list (every material,
-sensor, and the two actuator ON/OFF icons).
+you would a YouTube or ThingsBoard link today. Full endpoint reference,
+request/response shapes, and both control.html hotspot styles are documented
+in `API_DOCUMENTATION.md`.
 
 ## Cupola hotspot URLs (current item list)
 
@@ -107,16 +107,18 @@ widget.html?id=raw_material
 
 Sensor value labels (inline, plain text):
 ```
-widget.html?id=dht1_temp
-widget.html?id=dht1_humidity
-widget.html?id=dht2_temp
-widget.html?id=dht2_humidity
+widget.html?id=clin_dht_temp
+widget.html?id=clin_dht_humidity
+widget.html?id=cooler_dht_temp
+widget.html?id=cooler_dht_humidity
+widget.html?id=preheating_tower_dht_temp
+widget.html?id=preheating_tower_dht_humidity
 widget.html?id=vibration_sensor
 ```
 
 Actuator ON/OFF (two hotspots per actuator — swap `crusher` for any of:
-conveyor_1, conveyor_2, conveyor_3, conveyor_4, clin, heater, heat_blower,
-cooler_fan, clin_cooler_fan, vibration_motor, ball_mill_1, ball_mill_2):
+conveyor_1, conveyor_2, conveyor_3, conveyor_4, clin, clin_heater, heat_blower,
+cooler_fan, preheating_tower_heater, vibration_motor, ball_mill_1, ball_mill_2):
 ```
 control.html?id=crusher&action=on
 control.html?id=crusher&action=off
@@ -132,14 +134,19 @@ control.html?id=crusher&action=off
 - `crusher` fires all 3 N20 motors (left, right, wheel) together — they're
   wired in parallel to one relay, so there's only ever one ON/OFF for it, not
   three separate controls.
-- `dht1_*` is assumed to be mounted near the clin/heater section and `dht2_*`
-  near the cooler section — rename these (in both `esp2_relay.ino` and
-  `backend/src/config/itemRegistry.js`) if they're actually somewhere else.
+- `control.html` supports two Cupola hotspot styles (persistent embed with
+  live-highlighted buttons, or a link that fires immediately on open) — see
+  Section 4 of `API_DOCUMENTATION.md` for exactly how each one behaves.
+- `clin_dht_*` is near the clin/`clin_heater` section, `cooler_dht_*` is near
+  the cooler section, and `preheating_tower_dht_*` is near the
+  `preheating_tower_heater` — rename any of these (in both `esp2_relay.ino`
+  and `backend/src/config/itemRegistry.js`) if a sensor moves.
 - Channels 14-16 on the relay board are spare. `ball_mill_1`/`ball_mill_2`
-  used the last 2 free safe GPIOs (32, 33), so the board's GPIO budget is now
-  fully used by channels 1-13 + the 3 sensors — wiring the remaining 3
-  channels later needs an I2C GPIO expander (e.g. PCF8574), not more direct
-  ESP32 pins — see the note at the bottom of `esp2_relay.ino`.
+  and the third DHT11 (`preheating_tower_dht`, on GPIO15) used up the last
+  free GPIOs, so the board's GPIO budget is now fully used by channels 1-13 +
+  the 3 sensors — wiring the remaining 3 channels later needs an I2C GPIO
+  expander (e.g. PCF8574), not more direct ESP32 pins — see the note at the
+  bottom of `esp2_relay.ino`.
 - Calibration factor (96.322) and servo oscillation range (90-195) on ESP32-1
   were kept exactly as supplied. Recalibrate a specific pair individually in
   `materials[]` if its readings drift, rather than changing the shared constant.

@@ -15,14 +15,19 @@ const { findItem, dispensableItems } = require("../config/itemRegistry");
 const mqttClient = require("../mqtt/mqttClient");
 
 router.post("/materials/targets", (req, res) => {
+  console.log(`[API] POST /api/materials/targets - body: ${JSON.stringify(req.body)}`);
   const accepted = [];
   const rejected = [];
 
   for (const [item_id, target] of Object.entries(req.body || {})) {
     const item = findItem(item_id);
     if (item && item.dispensable && typeof target === "number") {
-      mqttClient.publishTarget(item_id, target);
-      accepted.push(item_id);
+      const ok = mqttClient.publishTarget(item_id, target);
+      if (ok) {
+        accepted.push(item_id);
+      } else {
+        rejected.push(item_id);
+      }
     } else {
       rejected.push(item_id);
     }
@@ -32,6 +37,7 @@ router.post("/materials/targets", (req, res) => {
 });
 
 router.post("/item/:id/target", (req, res) => {
+  console.log(`[API] POST /api/item/${req.params.id}/target - body: ${JSON.stringify(req.body)}`);
   const item = findItem(req.params.id);
   if (!item) return res.status(404).json({ error: "Unknown item_id" });
   if (!item.dispensable) return res.status(400).json({ error: `${item.id} is not dispensable` });
@@ -42,6 +48,8 @@ router.post("/item/:id/target", (req, res) => {
   }
 
   mqttClient.publishTarget(item.id, target);
+  const ok = mqttClient.publishTarget(item.id, target);
+  if (!ok) return res.status(500).json({ error: "Failed to publish target to MQTT broker" });
   res.json({ item_id: item.id, target });
 });
 

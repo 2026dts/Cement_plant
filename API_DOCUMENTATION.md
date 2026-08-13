@@ -28,10 +28,12 @@ truth: `backend/src/config/itemRegistry.js`.
 
 | item_id | unit | notes |
 |---|---|---|
-| `dht1_temp` | C | assumed near clin/heater |
-| `dht1_humidity` | % | assumed near clin/heater |
-| `dht2_temp` | C | assumed near cooler section |
-| `dht2_humidity` | % | assumed near cooler section |
+| `clin_dht_temp` | C | near clin / clin_heater |
+| `clin_dht_humidity` | % | near clin / clin_heater |
+| `cooler_dht_temp` | C | near cooler section |
+| `cooler_dht_humidity` | % | near cooler section |
+| `preheating_tower_dht_temp` | C | near preheating tower / preheating_tower_heater |
+| `preheating_tower_dht_humidity` | % | near preheating tower / preheating_tower_heater |
 | `vibration_sensor` | /8 | separate from `vibration_motor` actuator below |
 
 ### Actuators (ESP32-2 — 13 relay channels wired)
@@ -44,10 +46,10 @@ truth: `backend/src/config/itemRegistry.js`.
 | `conveyor_3` | |
 | `conveyor_4` | |
 | `clin` | kiln motor |
-| `heater` | inside the clin |
+| `clin_heater` | inside the clin (renamed from `heater`) |
 | `heat_blower` | mini exhaust fan, inside the clin |
 | `cooler_fan` | cooler's own exhaust fan |
-| `clin_cooler_fan` | inbuilt cooler fan, attached to the clin |
+| `preheating_tower_heater` | NEW — replaces `clin_cooler_fan` (removed) |
 | `vibration_motor` | feeder vibration motor |
 | `ball_mill_1` | |
 | `ball_mill_2` | |
@@ -206,7 +208,7 @@ for every material and sensor. Works the same way regardless of hotspot type
 
 ```
 widget.html?id=iron_ore        ->  "iron_ore: 52 g"
-widget.html?id=dht1_temp       ->  "dht1_temp: 32.5 C"
+widget.html?id=clin_dht_temp   ->  "clin_dht_temp: 32.5 C"
 ```
 
 ### `control.html?id=<item_id>` — for actuators, TWO usage styles
@@ -246,15 +248,17 @@ Materials / sensors (inline value):
   widget.html?id=iron_ore
   widget.html?id=sand
   widget.html?id=raw_material
-  widget.html?id=dht1_temp
-  widget.html?id=dht1_humidity
-  widget.html?id=dht2_temp
-  widget.html?id=dht2_humidity
+  widget.html?id=clin_dht_temp
+  widget.html?id=clin_dht_humidity
+  widget.html?id=cooler_dht_temp
+  widget.html?id=cooler_dht_humidity
+  widget.html?id=preheating_tower_dht_temp
+  widget.html?id=preheating_tower_dht_humidity
   widget.html?id=vibration_sensor
 
 Actuators (pick Style A or Style B per actuator, see above):
-  crusher, conveyor_1, conveyor_2, conveyor_3, conveyor_4, clin, heater,
-  heat_blower, cooler_fan, clin_cooler_fan, vibration_motor,
+  crusher, conveyor_1, conveyor_2, conveyor_3, conveyor_4, clin, clin_heater,
+  heat_blower, cooler_fan, preheating_tower_heater, vibration_motor,
   ball_mill_1, ball_mill_2
 ```
 

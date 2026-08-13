@@ -13,6 +13,20 @@ const store = require("../state/store");
 let client = null;
 let onUpdateCallback = null; // wired up by server.js -> broadcasts over WebSocket
 
+// The ESP32-2 relay board physically energizes opposite to whatever command
+// it's sent (a wiring/active-low mismatch on the relay board itself). Rather
+// than reflashing ESP32-2, both directions are flipped in software here:
+// commands going OUT are inverted before publishing, and the relay's state
+// coming back IN is inverted before being stored/broadcast. Net effect: the
+// Dashboard/API "on"/"off" always matches the actuator's real physical state.
+const ACTUATOR_LOGIC_INVERTED = true;
+
+function invertOnOff(v) {
+  if (v === "on") return "off";
+  if (v === "off") return "on";
+  return v; // not an on/off value (e.g. a numeric sensor reading) - leave as-is
+}
+
 function topicValue(item) {
   return `plant/${item.source}/${item.id}`;
 }
@@ -72,8 +86,13 @@ function connect(onUpdate) {
       return;
     }
 
-    // Normal live-value update
-    const updated = store.setValue(item.id, payload.value, payload.unit || item.unit);
+    // Normal live-value update. For actuators, undo the relay board's
+    // inversion so the stored/broadcast state matches reality.
+    let value = payload.value;
+    if (ACTUATOR_LOGIC_INVERTED && item.type === "actuator") {
+      value = invertOnOff(value);
+    }
+    const updated = store.setValue(item.id, value, payload.unit || item.unit);
     if (onUpdateCallback) onUpdateCallback(item.id, updated);
   });
 }
@@ -86,16 +105,36 @@ function isConnected() {
 function publishCommand(item_id, command) {
   const item = findItem(item_id);
   if (!item) return false;
-  client.publish(topicCmd(item), JSON.stringify({ command }));
-  return true;
+  if (!client || !client.connected) {
+    console.warn(`[MQTT] publishCommand: MQTT client not connected, cannot send command for ${item_id}`);
+    return false;
+  }
+  const wireCommand = ACTUATOR_LOGIC_INVERTED ? invertOnOff(command) : command;
+  try {
+    client.publish(topicCmd(item), JSON.stringify({ command: wireCommand }));
+    return true;
+  } catch (e) {
+    console.error(`[MQTT] publishCommand: failed to publish for ${item_id}:`, e.message || e);
+    return false;
+  }
 }
 
 // Used by the material dispensing routes (Feature B, Architecture v5)
 function publishTarget(item_id, target) {
   const item = findItem(item_id);
   if (!item || !item.dispensable) return false;
-  client.publish(topicTargetCmd(item), JSON.stringify({ target }));
-  return true;
+  if (!client || !client.connected) {
+    console.warn(`[MQTT] publishTarget: MQTT client not connected, cannot send target for ${item_id}`);
+    return false;
+  }
+  try {
+    client.publish(topicTargetCmd(item), JSON.stringify({ target }));
+    console.log(`[MQTT] Published target ${target} to ${topicTargetCmd(item)}`);
+    return true;
+  } catch (e) {
+    console.error(`[MQTT] publishTarget: failed to publish for ${item_id}:`, e.message || e);
+    return false;
+  }
 }
 
 module.exports = { connect, isConnected, publishCommand, publishTarget };

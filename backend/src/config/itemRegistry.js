@@ -18,30 +18,36 @@ const ITEM_REGISTRY = [
   { id: "sand",         type: "material", source: "esp1", unit: "g", dispensable: true },
   { id: "raw_material", type: "material", source: "esp1", unit: "g", dispensable: true },
 
-  // ---- ESP2: 16-channel relay board (2x8), 11 channels wired ----
-  // Matches esp32/esp2-relay/esp2_relay.ino exactly. Channels 12-16 are spare.
-  { id: "crusher",         type: "actuator", source: "esp2", unit: "on/off", relayChannel: 1 },  // gangs 3 N20 motors (left/right/wheel) on one relay
-  { id: "conveyor_1",      type: "actuator", source: "esp2", unit: "on/off", relayChannel: 2 },
-  { id: "conveyor_2",      type: "actuator", source: "esp2", unit: "on/off", relayChannel: 3 },
-  { id: "conveyor_3",      type: "actuator", source: "esp2", unit: "on/off", relayChannel: 4 },
-  { id: "conveyor_4",      type: "actuator", source: "esp2", unit: "on/off", relayChannel: 5 },
-  { id: "clin",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 6 },  // kiln motor
-  { id: "heater",          type: "actuator", source: "esp2", unit: "on/off", relayChannel: 7 },  // inside the clin
-  { id: "heat_blower",     type: "actuator", source: "esp2", unit: "on/off", relayChannel: 8 },  // mini exhaust fan, inside the clin
-  { id: "cooler_fan",      type: "actuator", source: "esp2", unit: "on/off", relayChannel: 9 },  // cooler's own exhaust mini fan
-  { id: "clin_cooler_fan", type: "actuator", source: "esp2", unit: "on/off", relayChannel: 10 }, // separate inbuilt cooler fan, attached to the clin
-  { id: "vibration_motor", type: "actuator", source: "esp2", unit: "on/off", relayChannel: 11 }, // feeder vibration motor (not the vibration sensor below)
-  { id: "ball_mill_1",     type: "actuator", source: "esp2", unit: "on/off", relayChannel: 12 },
-  { id: "ball_mill_2",     type: "actuator", source: "esp2", unit: "on/off", relayChannel: 13 },
+  // ---- ESP2: 16-channel relay board (2x8), 14 channels wired ----
+  // Matches esp32/esp2-relay/esp2_relay.ino exactly. Channels 15-16 are spare.
+  { id: "crusher",                type: "actuator", source: "esp2", unit: "on/off", relayChannel: 1 },  // gangs 3 N20 motors (left/right/wheel) on one relay
+  { id: "conveyor_1",             type: "actuator", source: "esp2", unit: "on/off", relayChannel: 2 },
+  { id: "conveyor_2",             type: "actuator", source: "esp2", unit: "on/off", relayChannel: 3 },
+  { id: "conveyor_3",             type: "actuator", source: "esp2", unit: "on/off", relayChannel: 4 },
+  { id: "conveyor_4",             type: "actuator", source: "esp2", unit: "on/off", relayChannel: 5 },
+  { id: "clin",                   type: "actuator", source: "esp2", unit: "on/off", relayChannel: 6 },  // kiln motor
+  { id: "clin_heater",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 7 },  // inside the clin (renamed from "heater")
+  { id: "heat_blower",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 8 },  // mini exhaust fan, inside the clin
+  { id: "cooler_fan",             type: "actuator", source: "esp2", unit: "on/off", relayChannel: 9 },  // cooler's own exhaust mini fan
+  { id: "preheating_tower_heater",type: "actuator", source: "esp2", unit: "on/off", relayChannel: 10 }, // replaces "clin_cooler_fan" (removed)
+  { id: "vibration_motor",        type: "actuator", source: "esp2", unit: "on/off", relayChannel: 11 }, // feeder vibration motor (not the vibration sensor below)
+  { id: "ball_mill_1",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 12 },
+  { id: "ball_mill_2",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 13 },
+  { id: "preheating_tower_exhaust_fan", type: "actuator", source: "esp2", unit: "on/off", relayChannel: 14 }, // NEW
 
   // ---- ESP2: sensors (not relay-controlled) ----
-  // ASSUMPTION: dht1 = near the clin/heater section, dht2 = near the cooler
-  // section. Rename if the two DHT11s are actually mounted elsewhere.
-  { id: "dht1_temp",        type: "sensor", source: "esp2", unit: "C" },
-  { id: "dht1_humidity",    type: "sensor", source: "esp2", unit: "%" },
-  { id: "dht2_temp",        type: "sensor", source: "esp2", unit: "C" },
-  { id: "dht2_humidity",    type: "sensor", source: "esp2", unit: "%" },
-  { id: "vibration_sensor", type: "sensor", source: "esp2", unit: "/8" },
+  // clin_dht = near the clin/clin_heater section (renamed from "dht1").
+  // cooler_dht = near the cooler section (renamed from "dht2").
+  // preheating_tower_dht = near the preheating tower / preheating_tower_heater.
+  { id: "clin_dht_temp",                  type: "sensor", source: "esp2", unit: "C" },
+  { id: "clin_dht_humidity",              type: "sensor", source: "esp2", unit: "%" },
+  { id: "cooler_dht_temp",                type: "sensor", source: "esp2", unit: "C" },
+  { id: "cooler_dht_humidity",            type: "sensor", source: "esp2", unit: "%" },
+  { id: "preheating_tower_dht_temp",      type: "sensor", source: "esp2", unit: "C" },
+  { id: "preheating_tower_dht_humidity",  type: "sensor", source: "esp2", unit: "%" },
+  // vibration_sensor now reads a real analog vibration/accelerometer module
+  // (GPIO34) reporting peak acceleration in g, not the old 0-8 placeholder scale.
+  { id: "vibration_sensor",               type: "sensor", source: "esp2", unit: "g" },
 ];
 
 function findItem(id) {
