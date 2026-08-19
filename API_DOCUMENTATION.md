@@ -28,8 +28,8 @@ truth: `backend/src/config/itemRegistry.js`.
 
 | item_id | unit | notes |
 |---|---|---|
-| `clin_dht_temp` | C | near clin / clin_heater |
-| `clin_dht_humidity` | % | near clin / clin_heater |
+| `klin_dht_temp` | C | near klin / klin_heater |
+| `klin_dht_humidity` | % | near klin / klin_heater |
 | `cooler_dht_temp` | C | near cooler section |
 | `cooler_dht_humidity` | % | near cooler section |
 | `preheating_tower_dht_temp` | C | near preheating tower / preheating_tower_heater |
@@ -45,11 +45,11 @@ truth: `backend/src/config/itemRegistry.js`.
 | `conveyor_2` | |
 | `conveyor_3` | |
 | `conveyor_4` | |
-| `clin` | kiln motor |
-| `clin_heater` | inside the clin (renamed from `heater`) |
-| `heat_blower` | mini exhaust fan, inside the clin |
+| `klin` | kiln motor |
+| `klin_heater` | inside the klin (renamed from `heater`) |
+| `heat_blower` | mini exhaust fan, inside the klin |
 | `preheating_tower_fan` | preheating tower fan (renamed from `cooler_fan`) |
-| `preheating_tower_heater` | NEW — replaces `clin_cooler_fan` (removed) |
+| `preheating_tower_heater` | NEW — replaces `klin_cooler_fan` (removed) |
 | `vibration_motor` | feeder vibration motor |
 | `ball_mill_1` | |
 | `ball_mill_2` | |

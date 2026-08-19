@@ -83,8 +83,8 @@ export function useLiveData() {
   }, []);
 
   const manualOverrides = {
-    clin: items.clin_manual_override?.value === true || items.clin_manual_override?.value === "true",
-    clin_heater: items.clin_heater_manual_override?.value === true || items.clin_heater_manual_override?.value === "true",
+    klin: items.klin_manual_override?.value === true || items.klin_manual_override?.value === "true",
+    klin_heater: items.klin_heater_manual_override?.value === true || items.klin_heater_manual_override?.value === "true",
   };
 
   return { items, connected, deviceStatus, manualOverrides };

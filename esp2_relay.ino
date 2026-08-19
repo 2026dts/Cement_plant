@@ -19,21 +19,21 @@
     Channel 3  -> conveyor_2
     Channel 4  -> conveyor_3
     Channel 5  -> conveyor_4
-    Channel 6  -> clin                          (kiln motor)
-    Channel 7  -> clin_heater                   (inside the clin) [RENAMED from "heater"]
-    Channel 8  -> heat_blower                   (mini exhaust fan, next to clin_heater, inside the clin)
+    Channel 6  -> klin                          (kiln motor)
+    Channel 7  -> klin_heater                   (inside the klin) [RENAMED from "heater"]
+    Channel 8  -> heat_blower                   (mini exhaust fan, next to klin_heater, inside the klin)
     Channel 9  -> preheating_tower_fan          (preheating tower fan - renamed from cooler_fan)
-    Channel 10 -> preheating_tower_heater       [NEW - reuses the channel/pin freed by removing clin_cooler_fan]
+    Channel 10 -> preheating_tower_heater       [NEW - reuses the channel/pin freed by removing klin_cooler_fan]
     Channel 11 -> vibration_motor
     Channel 12 -> ball_mill_1
     Channel 13 -> ball_mill_2
     Channel 14-16 -> spare, not wired yet (see GPIO note above)
 
-  REMOVED: clin_cooler_fan (no longer wired - its relay/GPIO was reassigned to
+  REMOVED: klin_cooler_fan (no longer wired - its relay/GPIO was reassigned to
   preheating_tower_heater above).
 
   DHT11 sensors -> renamed / added:
-    dht1  -> clin_dht              (unchanged location: near clin/heater)     [RENAMED from "dht1"]
+    dht1  -> klin_dht              (unchanged location: near klin/heater)     [RENAMED from "dht1"]
     dht2  -> cooler_dht            (unchanged location: near the cooler)      [RENAMED from "dht2"]
     NEW   -> preheating_tower_dht  (near the preheating tower / new heater)
 
@@ -55,9 +55,9 @@
     Ch 3  conveyor_2               -> GPIO13    Ch 10 preheating_tower_heater -> GPIO22
     Ch 4  conveyor_3               -> GPIO14    Ch 11 vibration_motor         -> GPIO23
     Ch 5  conveyor_4               -> GPIO16    Ch 12 ball_mill_1             -> GPIO32
-    Ch 6  clin                     -> GPIO17    Ch 13 ball_mill_2             -> GPIO33
+    Ch 6  klin                     -> GPIO17    Ch 13 ball_mill_2             -> GPIO33
 
-    DHT11 (clin_dht)              -> GPIO25 (10k pull-up to 3.3V)
+    DHT11 (klin_dht)              -> GPIO25 (10k pull-up to 3.3V)
     DHT11 (cooler_dht)            -> GPIO26 (10k pull-up to 3.3V)
     DHT11 (preheating_tower_dht)  -> GPIO15 (10k pull-up to 3.3V) - see note below
     Vibration sensor               -> GPIO27 (digital output module, e.g. SW-420)
@@ -73,8 +73,8 @@
       plant/esp2/conveyor_1/cmd            -> subscribed command  { "command": "on" | "off" | "auto" }
       plant/esp2/conveyor_1                -> published state      { "value": "on" | "off" }
     Sensors:
-      plant/esp2/clin_dht_temp             -> { "value": 32.5, "unit": "C" }
-      plant/esp2/clin_dht_humidity         -> { "value": 41,   "unit": "%" }
+      plant/esp2/klin_dht_temp             -> { "value": 32.5, "unit": "C" }
+      plant/esp2/klin_dht_humidity         -> { "value": 41,   "unit": "%" }
       plant/esp2/cooler_dht_temp           -> { "value": 30.1, "unit": "C" }
       plant/esp2/cooler_dht_humidity       -> { "value": 38,   "unit": "%" }
       plant/esp2/preheating_tower_dht_temp     -> { "value": 34.0, "unit": "C" }
@@ -82,11 +82,11 @@
       plant/esp2/vibration_sensor          -> { "value": 1,    "unit": "/8" }
     Device / PID status:
       plant/esp2/status                    -> { "value": "online" | "offline" } (LWT + on-connect)
-      plant/esp2/clin/manual_override      -> { "value": true | false }  (retained)
-      plant/esp2/clin_heater/manual_override -> { "value": true | false } (retained)
+      plant/esp2/klin/manual_override      -> { "value": true | false }  (retained)
+      plant/esp2/klin_heater/manual_override -> { "value": true | false } (retained)
     Override resume (subscribed, sent by backend dashboard):
-      plant/esp2/clin/override_cmd         -> { "command": "auto" }
-      plant/esp2/clin_heater/override_cmd  -> { "command": "auto" }
+      plant/esp2/klin/override_cmd         -> { "command": "auto" }
+      plant/esp2/klin_heater/override_cmd  -> { "command": "auto" }
 */
 
 #include <WiFi.h>
@@ -97,10 +97,10 @@
 // ============================================================================
 // ---------------------------- USER CONFIGURATION ---------------------------
 // ============================================================================
-constexpr char WIFI_SSID[]     = "prakash";
-constexpr char WIFI_PASSWORD[] = "12345678";
+constexpr char WIFI_SSID[]     = "ACT-ai_103812010408";
+constexpr char WIFI_PASSWORD[] = "33346558";
 
-constexpr char MQTT_BROKER_HOST[] = "10.158.91.91";   // local Mosquitto machine's LAN IP
+constexpr char MQTT_BROKER_HOST[] = "192.168.0.2";    // local Mosquitto machine's LAN IP
 constexpr uint16_t MQTT_BROKER_PORT = 1883U;
 constexpr char MQTT_USER[]     = "";
 constexpr char MQTT_PASSWORD[] = "";
@@ -116,15 +116,15 @@ constexpr bool RELAY_ACTIVE_LOW = true;  // Active-LOW relay module: LOW = coil 
 // ---------------------- PID TEMPERATURE CONTROL CONFIG ----------------------
 // ============================================================================
 // These are the only values you need to change to tune the PID behaviour.
-// The PID controls clin_heater ON/OFF duty within a 10-second window:
+// The PID controls klin_heater ON/OFF duty within a 10-second window:
 //   ON time (ms) = (pid_output / 255) * PID_PERIOD_MS
-//   When heater is OFF during the window, the clin motor runs instead.
+//   When heater is OFF during the window, the klin motor runs instead.
 //
 // Kd is intentionally small: DHT11 gives integer-step readings (e.g. 34->35°C),
 // which produce sharp derivative spikes. A high Kd would cause the heater to
 // overreact to a single 1°C jump.
 //
-constexpr float    PID_SETPOINT   = 35.0f;   // Target clin area temperature (°C)
+constexpr float    PID_SETPOINT   = 35.0f;   // Target klin area temperature (°C)
 constexpr float    PID_KP         = 2.0f;    // Proportional gain
 constexpr float    PID_KI         = 0.1f;    // Integral gain
 constexpr float    PID_KD         = 0.05f;   // Derivative gain (low — DHT11 integer steps)
@@ -146,11 +146,11 @@ RelayChannel relays[13] = {
   { "conveyor_2",             23 },  // channel 3
   { "conveyor_3",             19 },  // channel 4
   { "conveyor_4",             13 },  // channel 5
-  { "clin",                   21 },  // channel 6
-  { "clin_heater",            18 },  // channel 7  - renamed from "heater"
+  { "klin",                   21 },  // channel 6
+  { "klin_heater",            18 },  // channel 7  - renamed from "heater"
   { "heat_blower",            2 },  // channel 8
   { "preheating_tower_fan",   5 },  // channel 9  - renamed from "cooler_fan"
-  { "preheating_tower_heater",4 },  // channel 10 - NEW, replaces "clin_cooler_fan" (removed)
+  { "preheating_tower_heater",4 },  // channel 10 - NEW, replaces "klin_cooler_fan" (removed)
   { "vibration_motor",        14 },  // channel 11
   { "ball_mill_1",            32 },  // channel 12
   { "ball_mill_2",            33 },  // channel 13
@@ -160,11 +160,11 @@ constexpr uint8_t NUM_RELAYS = 13;
 // ============================================================================
 // ------------------------------ SENSOR CHANNELS -------------------------------
 // ============================================================================
-#define CLIN_DHT_PIN 15
+#define KLIN_DHT_PIN 15
 #define COOLER_DHT_PIN 25
 #define PREHEAT_DHT_PIN 26   // strapping pin - see NOTE ON GPIO15 above
 #define DHT_TYPE DHT11
-DHT clinDht(CLIN_DHT_PIN, DHT_TYPE);
+DHT klinDht(KLIN_DHT_PIN, DHT_TYPE);
 DHT coolerDht(COOLER_DHT_PIN, DHT_TYPE);
 DHT preheatDht(PREHEAT_DHT_PIN, DHT_TYPE);
 
@@ -203,7 +203,7 @@ String topicCmd(const char *item_id)   { return String("plant/esp2/") + item_id 
 // ============================================================================
 float    pidIntegral       = 0.0f;
 float    pidPrevError      = 0.0f;
-float    latestClinTemp    = NAN;    // most recent valid clin DHT reading
+float    latestKlinTemp    = NAN;    // most recent valid klin DHT reading
 uint8_t  pidOutput         = 128;   // 0-255; start at midpoint (50% duty)
 uint32_t pidOnDurationMs   = PID_PERIOD_MS / 2;
 unsigned long pidWindowStartMs = 0; // millis() when current 10s window began
@@ -211,7 +211,7 @@ unsigned long pidWindowStartMs = 0; // millis() when current 10s window began
 // ============================================================================
 // ------------------------- MANUAL OVERRIDE STATE ----------------------------
 // ============================================================================
-bool clinManualOverride    = false;
+bool klinManualOverride    = false;
 bool heaterManualOverride  = false;
 
 // ============================================================================
@@ -285,21 +285,21 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
   String topicStr(topic);
 
   // ---- Handle "Resume Auto" override clear commands ----
-  if (topicStr == "plant/esp2/clin/override_cmd" ||
-      topicStr == "plant/esp2/clin_heater/override_cmd") {
+  if (topicStr == "plant/esp2/klin/override_cmd" ||
+      topicStr == "plant/esp2/klin_heater/override_cmd") {
     StaticJsonDocument<48> doc;
     DeserializationError err = deserializeJson(doc, payload, length);
     if (err) return;
     const char *command = doc["command"] | "";
     if (strcmp(command, "auto") == 0) {
-      if (topicStr == "plant/esp2/clin/override_cmd") {
-        clinManualOverride = false;
-        publishOverrideStatus("clin", false);
-        Serial.println("[OVERRIDE] clin -> PID auto resumed");
+      if (topicStr == "plant/esp2/klin/override_cmd") {
+        klinManualOverride = false;
+        publishOverrideStatus("klin", false);
+        Serial.println("[OVERRIDE] klin -> PID auto resumed");
       } else {
         heaterManualOverride = false;
-        publishOverrideStatus("clin_heater", false);
-        Serial.println("[OVERRIDE] clin_heater -> PID auto resumed");
+        publishOverrideStatus("klin_heater", false);
+        Serial.println("[OVERRIDE] klin_heater -> PID auto resumed");
       }
     }
     return;
@@ -326,14 +326,14 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
     return;
   }
 
-  if (strcmp(r->item_id, "clin") == 0) {
-    clinManualOverride = true;
-    publishOverrideStatus("clin", true);
-    Serial.println("[OVERRIDE] clin -> manual override ACTIVE (PID paused)");
-  } else if (strcmp(r->item_id, "clin_heater") == 0) {
+  if (strcmp(r->item_id, "klin") == 0) {
+    klinManualOverride = true;
+    publishOverrideStatus("klin", true);
+    Serial.println("[OVERRIDE] klin -> manual override ACTIVE (PID paused)");
+  } else if (strcmp(r->item_id, "klin_heater") == 0) {
     heaterManualOverride = true;
-    publishOverrideStatus("clin_heater", true);
-    Serial.println("[OVERRIDE] clin_heater -> manual override ACTIVE (PID paused)");
+    publishOverrideStatus("klin_heater", true);
+    Serial.println("[OVERRIDE] klin_heater -> manual override ACTIVE (PID paused)");
   }
 
   Serial.printf("[RELAY] %s -> %s\n", r->item_id, r->isOn ? "ON" : "OFF");
@@ -346,12 +346,14 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
 bool mqttConnect() {
   Serial.printf("Connecting to Mosquitto (%s:%u)...\n", MQTT_BROKER_HOST, MQTT_BROKER_PORT);
 
-  // Set LWT BEFORE connect(). Broker publishes "offline" if connection is lost.
-  mqtt.setWill("plant/esp2/status", "{\"value\":\"offline\"}", true, 1);
+  const char *willTopic  = "plant/esp2/status";
+  const char *willMsg    = "{\"value\":\"offline\"}";
+  uint8_t     willQos    = 1;
+  boolean     willRetain = true;
 
   bool ok = strlen(MQTT_USER) > 0
-              ? mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD)
-              : mqtt.connect(MQTT_CLIENT_ID);
+              ? mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD, willTopic, willQos, willRetain, willMsg)
+              : mqtt.connect(MQTT_CLIENT_ID, willTopic, willQos, willRetain, willMsg);
 
   if (!ok) {
     Serial.printf("[MQTT] Connect failed, rc=%d\n", mqtt.state());
@@ -372,12 +374,12 @@ bool mqttConnect() {
   }
 
   // Subscribe to manual override resume topics
-  mqtt.subscribe("plant/esp2/clin/override_cmd");
-  mqtt.subscribe("plant/esp2/clin_heater/override_cmd");
-  Serial.println("[MQTT] Subscribed: override_cmd topics for clin & clin_heater");
+  mqtt.subscribe("plant/esp2/klin/override_cmd");
+  mqtt.subscribe("plant/esp2/klin_heater/override_cmd");
+  Serial.println("[MQTT] Subscribed: override_cmd topics for klin & klin_heater");
 
-  publishOverrideStatus("clin",        clinManualOverride);
-  publishOverrideStatus("clin_heater", heaterManualOverride);
+  publishOverrideStatus("klin",        klinManualOverride);
+  publishOverrideStatus("klin_heater", heaterManualOverride);
 
   return true;
 }
@@ -403,14 +405,14 @@ void publishValue(const char *item_id, float value, const char *unit) {
 }
 
 void readAndPublishSensors() {
-  float ct = clinDht.readTemperature();
-  float ch = clinDht.readHumidity();
+  float ct = klinDht.readTemperature();
+  float ch = klinDht.readHumidity();
   if (!isnan(ct) && !isnan(ch)) {
-    latestClinTemp = ct;  // keep for PID
-    publishValue("clin_dht_temp", ct, "C");
-    publishValue("clin_dht_humidity", ch, "%");
+    latestKlinTemp = ct;  // keep for PID
+    publishValue("klin_dht_temp", ct, "C");
+    publishValue("klin_dht_humidity", ch, "%");
   } else {
-    Serial.println("[SENSOR] clin_dht read failed");
+    Serial.println("[SENSOR] klin_dht read failed");
   }
 
   float ot = coolerDht.readTemperature();
@@ -444,7 +446,7 @@ void readAndPublishSensors() {
   publishValue("vibration_sensor", vibrationG, "g");
 
   if (!isnan(ct)) {
-    Serial.printf("[SENSOR] clin: %.1fC %.0f%%  cooler: %.1fC %.0f%%  preheat: %.1fC %.0f%%  vib: %.3fg\n",
+    Serial.printf("[SENSOR] klin: %.1fC %.0f%%  cooler: %.1fC %.0f%%  preheat: %.1fC %.0f%%  vib: %.3fg\n",
                   ct, ch, ot, oh, pt, ph, vibrationG);
   }
 }
@@ -453,12 +455,12 @@ void readAndPublishSensors() {
 // --------------------------- PID CONTROL LOGIC ------------------------------
 // ============================================================================
 void computePidWindow() {
-  if (isnan(latestClinTemp)) {
-    Serial.println("[PID] No valid clin temp yet, skipping window");
+  if (isnan(latestKlinTemp)) {
+    Serial.println("[PID] No valid klin temp yet, skipping window");
     return;
   }
 
-  float error      = PID_SETPOINT - latestClinTemp;
+  float error      = PID_SETPOINT - latestKlinTemp;
   pidIntegral     += error;
 
   const float integralMax = 255.0f / PID_KI;
@@ -477,36 +479,36 @@ void computePidWindow() {
   pidOnDurationMs = (uint32_t)((pidOutput / 255.0f) * (float)PID_PERIOD_MS);
 
   Serial.printf("[PID] temp=%.1fC setpoint=%.1fC err=%.1f integ=%.2f deriv=%.2f out=%u onTime=%ums\n",
-                latestClinTemp, PID_SETPOINT, error, pidIntegral, derivative, pidOutput, pidOnDurationMs);
+                latestKlinTemp, PID_SETPOINT, error, pidIntegral, derivative, pidOutput, pidOnDurationMs);
 }
 
 void applyPidControl() {
-  if (clinManualOverride && heaterManualOverride) return;
+  if (klinManualOverride && heaterManualOverride) return;
 
   unsigned long now     = millis();
   unsigned long elapsed = now - pidWindowStartMs;
 
   bool heaterShouldBeOn = (elapsed < pidOnDurationMs);
-  bool clinShouldBeOn   = !heaterShouldBeOn;
+  bool klinShouldBeOn   = !heaterShouldBeOn;
 
-  RelayChannel *heaterRelay = findRelay("clin_heater");
-  RelayChannel *clinRelay   = findRelay("clin");
+  RelayChannel *heaterRelay = findRelay("klin_heater");
+  RelayChannel *klinRelay   = findRelay("klin");
 
   if (!heaterManualOverride && heaterRelay) {
     if (heaterRelay->isOn != heaterShouldBeOn) {
       writeRelay(*heaterRelay, heaterShouldBeOn);
       publishRelayState(*heaterRelay);
-      Serial.printf("[PID-RELAY] clin_heater -> %s (elapsed=%lums onTime=%ums)\n",
+      Serial.printf("[PID-RELAY] klin_heater -> %s (elapsed=%lums onTime=%ums)\n",
                     heaterShouldBeOn ? "ON" : "OFF", elapsed, pidOnDurationMs);
     }
   }
 
-  if (!clinManualOverride && clinRelay) {
-    if (clinRelay->isOn != clinShouldBeOn) {
-      writeRelay(*clinRelay, clinShouldBeOn);
-      publishRelayState(*clinRelay);
-      Serial.printf("[PID-RELAY] clin -> %s (elapsed=%lums onTime=%ums)\n",
-                    clinShouldBeOn ? "ON" : "OFF", elapsed, pidOnDurationMs);
+  if (!klinManualOverride && klinRelay) {
+    if (klinRelay->isOn != klinShouldBeOn) {
+      writeRelay(*klinRelay, klinShouldBeOn);
+      publishRelayState(*klinRelay);
+      Serial.printf("[PID-RELAY] klin -> %s (elapsed=%lums onTime=%ums)\n",
+                    klinShouldBeOn ? "ON" : "OFF", elapsed, pidOnDurationMs);
     }
   }
 }
@@ -524,7 +526,7 @@ void setup() {
     writeRelay(relays[i], false);
   }
 
-  clinDht.begin();
+  klinDht.begin();
   coolerDht.begin();
   preheatDht.begin();
   analogSetAttenuation(ADC_11db);

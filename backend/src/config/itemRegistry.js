@@ -25,21 +25,21 @@ const ITEM_REGISTRY = [
   { id: "conveyor_2",             type: "actuator", source: "esp2", unit: "on/off", relayChannel: 3 },
   { id: "conveyor_3",             type: "actuator", source: "esp2", unit: "on/off", relayChannel: 4 },
   { id: "conveyor_4",             type: "actuator", source: "esp2", unit: "on/off", relayChannel: 5 },
-  { id: "clin",                   type: "actuator", source: "esp2", unit: "on/off", relayChannel: 6 },  // kiln motor
-  { id: "clin_heater",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 7 },  // inside the clin (renamed from "heater")
-  { id: "heat_blower",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 8 },  // mini exhaust fan, inside the clin
+  { id: "klin",                   type: "actuator", source: "esp2", unit: "on/off", relayChannel: 6 },  // kiln motor
+  { id: "klin_heater",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 7 },  // inside the klin (renamed from "heater")
+  { id: "heat_blower",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 8 },  // mini exhaust fan, inside the klin
   { id: "preheating_tower_fan",   type: "actuator", source: "esp2", unit: "on/off", relayChannel: 9 },  // preheating tower fan (renamed from "cooler_fan")
-  { id: "preheating_tower_heater",type: "actuator", source: "esp2", unit: "on/off", relayChannel: 10 }, // replaces "clin_cooler_fan" (removed)
+  { id: "preheating_tower_heater",type: "actuator", source: "esp2", unit: "on/off", relayChannel: 10 }, // replaces "klin_cooler_fan" (removed)
   { id: "vibration_motor",        type: "actuator", source: "esp2", unit: "on/off", relayChannel: 11 }, // feeder vibration motor (not the vibration sensor below)
   { id: "ball_mill_1",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 12 },
   { id: "ball_mill_2",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 13 },
 
   // ---- ESP2: sensors (not relay-controlled) ----
-  // clin_dht = near the clin/clin_heater section (renamed from "dht1").
+  // klin_dht = near the klin/klin_heater section (renamed from "dht1").
   // cooler_dht = near the cooler section (renamed from "dht2").
   // preheating_tower_dht = near the preheating tower / preheating_tower_heater.
-  { id: "clin_dht_temp",                  type: "sensor", source: "esp2", unit: "C" },
-  { id: "clin_dht_humidity",              type: "sensor", source: "esp2", unit: "%" },
+  { id: "klin_dht_temp",                  type: "sensor", source: "esp2", unit: "C" },
+  { id: "klin_dht_humidity",              type: "sensor", source: "esp2", unit: "%" },
   { id: "cooler_dht_temp",                type: "sensor", source: "esp2", unit: "C" },
   { id: "cooler_dht_humidity",            type: "sensor", source: "esp2", unit: "%" },
   { id: "preheating_tower_dht_temp",      type: "sensor", source: "esp2", unit: "C" },
@@ -48,8 +48,8 @@ const ITEM_REGISTRY = [
   // ---- ESP1 / ESP2 status and manual override virtual items ----
   { id: "esp1_status",                    type: "sensor", source: "esp1", unit: "" },
   { id: "esp2_status",                    type: "sensor", source: "esp2", unit: "" },
-  { id: "clin_manual_override",         type: "sensor", source: "esp2", unit: "" },
-  { id: "clin_heater_manual_override",  type: "sensor", source: "esp2", unit: "" },
+  { id: "klin_manual_override",         type: "sensor", source: "esp2", unit: "" },
+  { id: "klin_heater_manual_override",  type: "sensor", source: "esp2", unit: "" },
 ];
 
 function findItem(id) {

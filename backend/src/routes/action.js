@@ -62,8 +62,8 @@ router.get("/item/:id/action/off", (req, res) => {
 router.post("/item/:id/resume-auto", (req, res) => {
   const item = assertActuator(req, res);
   if (!item) return;
-  if (item.id !== "clin" && item.id !== "clin_heater") {
-    return res.status(400).json({ error: "Only clin and clin_heater support auto PID mode" });
+  if (item.id !== "klin" && item.id !== "klin_heater") {
+    return res.status(400).json({ error: "Only klin and klin_heater support auto PID mode" });
   }
   mqttClient.publishResumeAuto(item.id);
   res.json({ item_id: item.id, status: "auto_resumed" });

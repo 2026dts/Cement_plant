@@ -59,8 +59,8 @@ function connect(onUpdate) {
     // Subscribe to status and override topics
     client.subscribe("plant/esp1/status");
     client.subscribe("plant/esp2/status");
-    client.subscribe("plant/esp2/clin/manual_override");
-    client.subscribe("plant/esp2/clin_heater/manual_override");
+    client.subscribe("plant/esp2/klin/manual_override");
+    client.subscribe("plant/esp2/klin_heater/manual_override");
   });
 
   client.on("reconnect", () => console.log("[MQTT] Reconnecting..."));
@@ -91,15 +91,15 @@ function connect(onUpdate) {
       return;
     }
 
-    // Handle clin / clin_heater manual override topics
-    if (topic === "plant/esp2/clin/manual_override") {
-      const updated = store.setValue("clin_manual_override", payload.value, "");
-      if (onUpdateCallback) onUpdateCallback("clin_manual_override", updated);
+    // Handle klin / klin_heater manual override topics
+    if (topic === "plant/esp2/klin/manual_override") {
+      const updated = store.setValue("klin_manual_override", payload.value, "");
+      if (onUpdateCallback) onUpdateCallback("klin_manual_override", updated);
       return;
     }
-    if (topic === "plant/esp2/clin_heater/manual_override") {
-      const updated = store.setValue("clin_heater_manual_override", payload.value, "");
-      if (onUpdateCallback) onUpdateCallback("clin_heater_manual_override", updated);
+    if (topic === "plant/esp2/klin_heater/manual_override") {
+      const updated = store.setValue("klin_heater_manual_override", payload.value, "");
+      if (onUpdateCallback) onUpdateCallback("klin_heater_manual_override", updated);
       return;
     }
 
@@ -151,9 +151,9 @@ function publishCommand(item_id, command) {
   }
 }
 
-// Used to resume automatic PID control for clin / clin_heater
+// Used to resume automatic PID control for klin / klin_heater
 function publishResumeAuto(item_id) {
-  if (item_id !== "clin" && item_id !== "clin_heater") return false;
+  if (item_id !== "klin" && item_id !== "klin_heater") return false;
   if (!client || !client.connected) {
     console.warn(`[MQTT] publishResumeAuto: MQTT client not connected, cannot resume auto for ${item_id}`);
     return false;

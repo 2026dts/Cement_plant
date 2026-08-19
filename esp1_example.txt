@@ -34,7 +34,6 @@
     plant/esp1/limestone                 -> published live weight  { "value": 23.4, "unit": "g" }
     plant/esp1/limestone/target/cmd      -> subscribed target      { "target": 50 }
     plant/esp1/limestone/target/status   -> published status       { "status": "dispensing" | "done" }
-    plant/esp1/status                    -> published device status { "value": "online" | "offline" }
 
   ============================= BOOT / TARE BEHAVIOUR =========================
   At boot, each channel's HX711 is brought up with a bounded timeout instead
@@ -249,7 +248,7 @@ void checkDispensingFast() {
       if (m.loadCell.is_ready()) {
         m.lastWeight = readLoadCellFast(m, 1); // 1 sample for instant measurement
         publishValue(m.item_id, m.lastWeight, "g");
-        Serial.printf("[DISPENSING FAST] %s: %.1fg / %.1fg\n", m.item_id, m.targetGrams);
+        Serial.printf("[DISPENSING FAST] %s: %.1fg / %.1fg\n", m.item_id, m.lastWeight, m.targetGrams);
         if (m.lastWeight >= m.targetGrams) {
           stopDispense(m);
         }
@@ -330,15 +329,12 @@ bool mqttConnect() {
   Serial.printf("Connecting to Mosquitto (%s:%u)...\n", MQTT_BROKER_HOST, MQTT_BROKER_PORT);
   String clientId = String(MQTT_CLIENT_ID) + "-" + WiFi.macAddress();
   const char *cid = clientId.c_str();
-
-  const char *willTopic  = "plant/esp1/status";
-  const char *willMsg    = "{\"value\":\"offline\"}";
-  uint8_t     willQos    = 1;
-  boolean     willRetain = true;
-
-  bool ok = strlen(MQTT_USER) > 0
-              ? mqtt.connect(cid, MQTT_USER, MQTT_PASSWORD, willTopic, willQos, willRetain, willMsg)
-              : mqtt.connect(cid, willTopic, willQos, willRetain, willMsg);
+  bool ok;
+  if (strlen(MQTT_USER) > 0) {
+    ok = mqtt.connect(cid, MQTT_USER, MQTT_PASSWORD);
+  } else {
+    ok = mqtt.connect(cid);
+  }
 
   if (!ok) {
     Serial.printf("[MQTT] Connect failed, rc=%d\n", mqtt.state());
@@ -346,11 +342,6 @@ bool mqttConnect() {
   }
 
   Serial.println("[MQTT] Connected to Mosquitto.");
-
-  // Announce online status immediately (retained)
-  mqtt.publish("plant/esp1/status", "{\"value\":\"online\"}", true);
-  Serial.println("[MQTT] Published: plant/esp1/status = online");
-
   for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
     mqtt.subscribe(topicTargetCmd(materials[i].item_id).c_str());
     Serial.printf("[MQTT] Subscribed: %s\n", topicTargetCmd(materials[i].item_id).c_str());

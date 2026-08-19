@@ -9,8 +9,8 @@ const SENSOR_TILES = [
   { id: "iron_ore", label: "Iron Ore", source: "esp1" },
   { id: "sand", label: "Sand", source: "esp1" },
   { id: "raw_material", label: "Raw Material", source: "esp1" },
-  { id: "clin_dht_temp", label: "Clin Area Temp", source: "esp2" },
-  { id: "clin_dht_humidity", label: "Clin Area Humidity", source: "esp2" },
+  { id: "klin_dht_temp", label: "Klin Area Temp", source: "esp2" },
+  { id: "klin_dht_humidity", label: "Klin Area Humidity", source: "esp2" },
   { id: "cooler_dht_temp", label: "Cooler Area Temp", source: "esp2" },
   { id: "cooler_dht_humidity", label: "Cooler Area Humidity", source: "esp2" },
   { id: "preheating_tower_dht_temp", label: "Preheating Tower Temp", source: "esp2" },
@@ -24,9 +24,9 @@ const ACTUATORS = [
   { id: "conveyor_2", label: "Conveyor 2" },
   { id: "conveyor_3", label: "Conveyor 3" },
   { id: "conveyor_4", label: "Conveyor 4" },
-  { id: "clin", label: "Clin" },
-  { id: "clin_heater", label: "Clin Heater" },
-  { id: "heat_blower", label: "Heat Blower (Clin)" },
+  { id: "klin", label: "Klin" },
+  { id: "klin_heater", label: "Klin Heater" },
+  { id: "heat_blower", label: "Heat Blower (Klin)" },
   { id: "preheating_tower_fan", label: "Preheating Tower Fan" },
   { id: "preheating_tower_heater", label: "Preheating Tower Heater" },
   { id: "vibration_motor", label: "Vibration Motor" },
@@ -136,7 +136,7 @@ export default function App() {
         <div className="flex items-center justify-between mb-3">
           <h2 className="font-semibold text-lg">Actuators (ESP2 - 16ch Relay Board)</h2>
           <span className="text-xs text-gray-500 font-medium">
-            PID Auto-Control Active for Clin & Clin Heater (Target 35°C)
+            PID Auto-Control Active for Klin & Klin Heater (Target 35°C)
           </span>
         </div>
 
