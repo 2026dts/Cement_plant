@@ -10,7 +10,10 @@ const COLORS = [
 ];
 
 export default function Tile({ id, label, source, value, unit, colorIndex }) {
-  const display = value === null || value === undefined ? "--" : value;
+  let display = value === null || value === undefined ? "--" : value;
+  if (typeof display === "number" && display < 0) {
+    display = 0;
+  }
   const gradient = COLORS[colorIndex % COLORS.length];
 
   return (

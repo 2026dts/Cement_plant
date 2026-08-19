@@ -48,7 +48,7 @@ truth: `backend/src/config/itemRegistry.js`.
 | `clin` | kiln motor |
 | `clin_heater` | inside the clin (renamed from `heater`) |
 | `heat_blower` | mini exhaust fan, inside the clin |
-| `cooler_fan` | cooler's own exhaust fan |
+| `preheating_tower_fan` | preheating tower fan (renamed from `cooler_fan`) |
 | `preheating_tower_heater` | NEW — replaces `clin_cooler_fan` (removed) |
 | `vibration_motor` | feeder vibration motor |
 | `ball_mill_1` | |
@@ -258,7 +258,7 @@ Materials / sensors (inline value):
 
 Actuators (pick Style A or Style B per actuator, see above):
   crusher, conveyor_1, conveyor_2, conveyor_3, conveyor_4, clin, clin_heater,
-  heat_blower, cooler_fan, preheating_tower_heater, vibration_motor,
+  heat_blower, preheating_tower_fan, preheating_tower_heater, vibration_motor,
   ball_mill_1, ball_mill_2
 ```
 

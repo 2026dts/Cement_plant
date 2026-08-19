@@ -28,12 +28,11 @@ const ITEM_REGISTRY = [
   { id: "clin",                   type: "actuator", source: "esp2", unit: "on/off", relayChannel: 6 },  // kiln motor
   { id: "clin_heater",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 7 },  // inside the clin (renamed from "heater")
   { id: "heat_blower",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 8 },  // mini exhaust fan, inside the clin
-  { id: "cooler_fan",             type: "actuator", source: "esp2", unit: "on/off", relayChannel: 9 },  // cooler's own exhaust mini fan
+  { id: "preheating_tower_fan",   type: "actuator", source: "esp2", unit: "on/off", relayChannel: 9 },  // preheating tower fan (renamed from "cooler_fan")
   { id: "preheating_tower_heater",type: "actuator", source: "esp2", unit: "on/off", relayChannel: 10 }, // replaces "clin_cooler_fan" (removed)
   { id: "vibration_motor",        type: "actuator", source: "esp2", unit: "on/off", relayChannel: 11 }, // feeder vibration motor (not the vibration sensor below)
   { id: "ball_mill_1",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 12 },
   { id: "ball_mill_2",            type: "actuator", source: "esp2", unit: "on/off", relayChannel: 13 },
-  { id: "preheating_tower_exhaust_fan", type: "actuator", source: "esp2", unit: "on/off", relayChannel: 14 }, // NEW
 
   // ---- ESP2: sensors (not relay-controlled) ----
   // clin_dht = near the clin/clin_heater section (renamed from "dht1").

@@ -149,15 +149,18 @@ bool reconnectWiFiIfNeeded() {
 float readLoadCellFast(MaterialFeed &m, uint8_t samples = 1) {
   if (m.loadCell.is_ready()) {
     float w = m.loadCell.get_units(samples); // 1 sample = INSTANT reading (0ms delay)
-    if (w > -0.5f && w < 0.5f) {
-      w = 0.0f; // Soft safety clamp: zero-drift tracking
+    if (w < 0.5f) {
+      w = 0.0f; // Clamp negative readings and zero-drift noise to 0.0
     }
     return w;
   }
-  return m.lastWeight;
+  return (m.lastWeight < 0.0f) ? 0.0f : m.lastWeight;
 }
 
 void publishValue(const char *item_id, float value, const char *unit) {
+  if (value < 0.0f) {
+    value = 0.0f; // Prevent publishing negative sensor values
+  }
   StaticJsonDocument<64> doc;
   doc["value"] = value;
   doc["unit"]  = unit;

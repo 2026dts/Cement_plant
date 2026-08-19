@@ -22,7 +22,7 @@
     Channel 6  -> clin                          (kiln motor)
     Channel 7  -> clin_heater                   (inside the clin) [RENAMED from "heater"]
     Channel 8  -> heat_blower                   (mini exhaust fan, next to clin_heater, inside the clin)
-    Channel 9  -> cooler_fan                    (cooler's own exhaust mini fan)
+    Channel 9  -> preheating_tower_fan          (preheating tower fan - renamed from cooler_fan)
     Channel 10 -> preheating_tower_heater       [NEW - reuses the channel/pin freed by removing clin_cooler_fan]
     Channel 11 -> vibration_motor
     Channel 12 -> ball_mill_1
@@ -47,13 +47,11 @@
   Set MQTT_BROKER_HOST below to your local Mosquitto machine's LAN IP.
 
   ================================ WIRING ====================================
-  Most 2-relay-module boards are ACTIVE-LOW (a LOW signal energizes the relay).
-  If your relays click the wrong way (ON when you send OFF), flip
-  RELAY_ACTIVE_LOW to false below. Test ONE channel first before wiring
-  everything up.
+  Actuators are connected to NO (Normally Open) relay terminals.
+  RELAY_ACTIVE_LOW is set to false (HIGH = ON / relay energized, LOW = OFF / relay de-energized).
 
     Ch 1  crusher                  -> GPIO4     Ch 8  heat_blower             -> GPIO19
-    Ch 2  conveyor_1               -> GPIO5     Ch 9  cooler_fan              -> GPIO21
+    Ch 2  conveyor_1               -> GPIO5     Ch 9  preheating_tower_fan    -> GPIO5
     Ch 3  conveyor_2               -> GPIO13    Ch 10 preheating_tower_heater -> GPIO22
     Ch 4  conveyor_3               -> GPIO14    Ch 11 vibration_motor         -> GPIO23
     Ch 5  conveyor_4               -> GPIO16    Ch 12 ball_mill_1             -> GPIO32
@@ -106,7 +104,10 @@ constexpr uint32_t MQTT_RECONNECT_DELAY_MS = 2000UL;
 constexpr uint32_t STATE_REPUBLISH_MS      = 10000UL; // periodic relay "still on/off" heartbeat
 constexpr uint32_t SENSOR_PUBLISH_MS       = 5000UL;  // DHT + vibration publish interval
 
-constexpr bool RELAY_ACTIVE_LOW = true; // most 2-relay-module boards - flip if wired opposite
+constexpr bool RELAY_ACTIVE_LOW = true;  // Active-LOW relay module: LOW = coil energized (NO closes / ON), HIGH = coil de-energized (NO opens / OFF)
+
+// Clin Area Temperature Control Threshold (deg C) - easily change this target value anytime:
+constexpr float CLIN_TEMP_THRESHOLD = 35.0f;
 
 // ============================================================================
 // ------------------------------ RELAY CHANNELS -------------------------------
@@ -127,7 +128,7 @@ RelayChannel relays[13] = {
   { "clin",                   21 },  // channel 6
   { "clin_heater",            18 },  // channel 7  - renamed from "heater"
   { "heat_blower",            2 },  // channel 8
-  { "cooler_fan",             5 },  // channel 9
+  { "preheating_tower_fan",   5 },  // channel 9  - renamed from "cooler_fan"
   { "preheating_tower_heater",4 },  // channel 10 - NEW, replaces "clin_cooler_fan" (removed)
   { "vibration_motor",        14 },  // channel 11
   { "ball_mill_1",            32 },  // channel 12
@@ -219,6 +220,13 @@ RelayChannel *relayForTopic(const String &topic) {
   return nullptr;
 }
 
+RelayChannel *findRelay(const char *item_id) {
+  for (uint8_t i = 0; i < NUM_RELAYS; i++) {
+    if (strcmp(relays[i].item_id, item_id) == 0) return &relays[i];
+  }
+  return nullptr;
+}
+
 // ============================================================================
 // -------------------------------- MQTT CALLBACK ------------------------------
 // ============================================================================
@@ -298,6 +306,38 @@ void readAndPublishSensors() {
   if (!isnan(ct) && !isnan(ch)) {
     publishValue("clin_dht_temp", ct, "C");
     publishValue("clin_dht_humidity", ch, "%");
+
+    // Automatic Clin & Clin Heater control based on Clin area temp threshold (CLIN_TEMP_THRESHOLD)
+    RelayChannel *clinRelay   = findRelay("clin");
+    RelayChannel *heaterRelay = findRelay("clin_heater");
+
+    if (clinRelay && heaterRelay) {
+      if (ct >= CLIN_TEMP_THRESHOLD) {
+        // At or above threshold: turn OFF clin_heater, turn ON clin motor
+        if (heaterRelay->isOn) {
+          Serial.printf("[AUTO-CONTROL] Clin temp %.1fC >= %.1fC -> Turning OFF clin_heater\n", ct, CLIN_TEMP_THRESHOLD);
+          writeRelay(*heaterRelay, false);
+          publishRelayState(*heaterRelay);
+        }
+        if (!clinRelay->isOn) {
+          Serial.printf("[AUTO-CONTROL] Clin temp %.1fC >= %.1fC -> Turning ON clin motor\n", ct, CLIN_TEMP_THRESHOLD);
+          writeRelay(*clinRelay, true);
+          publishRelayState(*clinRelay);
+        }
+      } else {
+        // Below threshold: turn OFF clin motor, turn ON clin_heater
+        if (clinRelay->isOn) {
+          Serial.printf("[AUTO-CONTROL] Clin temp %.1fC < %.1fC -> Turning OFF clin motor\n", ct, CLIN_TEMP_THRESHOLD);
+          writeRelay(*clinRelay, false);
+          publishRelayState(*clinRelay);
+        }
+        if (!heaterRelay->isOn) {
+          Serial.printf("[AUTO-CONTROL] Clin temp %.1fC < %.1fC -> Turning ON clin_heater\n", ct, CLIN_TEMP_THRESHOLD);
+          writeRelay(*heaterRelay, true);
+          publishRelayState(*heaterRelay);
+        }
+      }
+    }
   } else {
     Serial.println("[SENSOR] clin_dht read failed");
   }

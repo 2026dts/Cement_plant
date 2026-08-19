@@ -44,7 +44,10 @@
     const labelEl = document.getElementById("label");
 
     function render(itemId, value, unit) {
-      const shown = value === null || value === undefined ? "--" : value;
+      let shown = value === null || value === undefined ? "--" : value;
+      if (typeof shown === "number" && shown < 0) {
+        shown = 0;
+      }
       labelEl.textContent = `${itemId}: ${shown}${unit ? " " + unit : ""}`;
     }
 

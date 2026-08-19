@@ -5,7 +5,7 @@ Everything needed to run the platform end-to-end on the current hardware:
 - **ESP32-1**: 5 load cells (common SCK) + 5 servos — limestone, clay, iron_ore,
   sand, raw_material — each pair does closed-loop dispensing to a target weight.
 - **ESP32-2**: 16-channel relay board (2x8), 13 channels wired — crusher (gangs
-  3 N20 motors), conveyor_1-4, clin, clin_heater, heat_blower, cooler_fan,
+  3 N20 motors), conveyor_1-4, clin, clin_heater, heat_blower, preheating_tower_fan,
   preheating_tower_heater, vibration_motor, ball_mill_1, ball_mill_2 — plus 3x
   DHT11 and 1x vibration sensor (read-only, not relay-controlled).
 - Both boards talk directly to your local Mosquitto broker — no cloud, no
@@ -118,7 +118,7 @@ widget.html?id=vibration_sensor
 
 Actuator ON/OFF (two hotspots per actuator — swap `crusher` for any of:
 conveyor_1, conveyor_2, conveyor_3, conveyor_4, clin, clin_heater, heat_blower,
-cooler_fan, preheating_tower_heater, vibration_motor, ball_mill_1, ball_mill_2):
+preheating_tower_fan, preheating_tower_heater, vibration_motor, ball_mill_1, ball_mill_2):
 ```
 control.html?id=crusher&action=on
 control.html?id=crusher&action=off
