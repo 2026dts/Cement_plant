@@ -16,4 +16,8 @@ router.get("/item/:id", (req, res) => {
   res.json({ item_id: req.params.id, ...store.get(req.params.id) });
 });
 
+router.get("/devices", (req, res) => {
+  res.json(store.allDevices());
+});
+
 module.exports = router;

@@ -44,9 +44,11 @@ const ITEM_REGISTRY = [
   { id: "cooler_dht_humidity",            type: "sensor", source: "esp2", unit: "%" },
   { id: "preheating_tower_dht_temp",      type: "sensor", source: "esp2", unit: "C" },
   { id: "preheating_tower_dht_humidity",  type: "sensor", source: "esp2", unit: "%" },
-  // vibration_sensor now reads a real analog vibration/accelerometer module
-  // (GPIO34) reporting peak acceleration in g, not the old 0-8 placeholder scale.
-  { id: "vibration_sensor",               type: "sensor", source: "esp2", unit: "g" },
+  // ---- ESP1 / ESP2 status and manual override virtual items ----
+  { id: "esp1_status",                    type: "sensor", source: "esp1", unit: "" },
+  { id: "esp2_status",                    type: "sensor", source: "esp2", unit: "" },
+  { id: "clin_manual_override",         type: "sensor", source: "esp2", unit: "" },
+  { id: "clin_heater_manual_override",  type: "sensor", source: "esp2", unit: "" },
 ];
 
 function findItem(id) {

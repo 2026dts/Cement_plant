@@ -13,13 +13,8 @@ const store = require("../state/store");
 let client = null;
 let onUpdateCallback = null; // wired up by server.js -> broadcasts over WebSocket
 
-// The ESP32-2 relay board physically energizes opposite to whatever command
-// it's sent (a wiring/active-low mismatch on the relay board itself). Rather
-// than reflashing ESP32-2, both directions are flipped in software here:
-// commands going OUT are inverted before publishing, and the relay's state
-// coming back IN is inverted before being stored/broadcast. Net effect: the
-// Dashboard/API "on"/"off" always matches the actuator's real physical state.
-const ACTUATOR_LOGIC_INVERTED = true;
+// Relay ON/OFF logic alignment (ESP32 firmware handles active-low hardware logic natively)
+const ACTUATOR_LOGIC_INVERTED = false;
 
 function invertOnOff(v) {
   if (v === "on") return "off";
@@ -61,6 +56,11 @@ function connect(onUpdate) {
         client.subscribe(topicTargetStatus(item));
       }
     });
+    // Subscribe to status and override topics
+    client.subscribe("plant/esp1/status");
+    client.subscribe("plant/esp2/status");
+    client.subscribe("plant/esp2/clin/manual_override");
+    client.subscribe("plant/esp2/clin_heater/manual_override");
   });
 
   client.on("reconnect", () => console.log("[MQTT] Reconnecting..."));
@@ -75,14 +75,46 @@ function connect(onUpdate) {
       return;
     }
 
+    // Handle ESP1 LWT / device status topic
+    if (topic === "plant/esp1/status") {
+      const devStatus = store.setDeviceStatus("esp1", payload.value);
+      const updated = store.setValue("esp1_status", payload.value, "");
+      if (onUpdateCallback) onUpdateCallback("esp1_status", { ...updated, deviceStatus: devStatus });
+      return;
+    }
+
+    // Handle ESP2 LWT / device status topic
+    if (topic === "plant/esp2/status") {
+      const devStatus = store.setDeviceStatus("esp2", payload.value);
+      const updated = store.setValue("esp2_status", payload.value, "");
+      if (onUpdateCallback) onUpdateCallback("esp2_status", { ...updated, deviceStatus: devStatus });
+      return;
+    }
+
+    // Handle clin / clin_heater manual override topics
+    if (topic === "plant/esp2/clin/manual_override") {
+      const updated = store.setValue("clin_manual_override", payload.value, "");
+      if (onUpdateCallback) onUpdateCallback("clin_manual_override", updated);
+      return;
+    }
+    if (topic === "plant/esp2/clin_heater/manual_override") {
+      const updated = store.setValue("clin_heater_manual_override", payload.value, "");
+      if (onUpdateCallback) onUpdateCallback("clin_heater_manual_override", updated);
+      return;
+    }
+
     const item = ITEM_REGISTRY.find(
       (i) => topic === topicValue(i) || topic === topicTargetStatus(i)
     );
     if (!item) return;
 
+    // Whenever any telemetry or status message arrives from a device (esp1 or esp2),
+    // mark that device as online and record its lastSeen timestamp!
+    const devStatus = store.setDeviceStatus(item.source, "online");
+
     if (topic === topicTargetStatus(item)) {
       const updated = store.setDispenseStatus(item.id, payload.status);
-      if (onUpdateCallback) onUpdateCallback(item.id, updated);
+      if (onUpdateCallback) onUpdateCallback(item.id, { ...updated, deviceSource: item.source, deviceStatus: devStatus });
       return;
     }
 
@@ -93,7 +125,7 @@ function connect(onUpdate) {
       value = invertOnOff(value);
     }
     const updated = store.setValue(item.id, value, payload.unit || item.unit);
-    if (onUpdateCallback) onUpdateCallback(item.id, updated);
+    if (onUpdateCallback) onUpdateCallback(item.id, { ...updated, deviceSource: item.source, deviceStatus: devStatus });
   });
 }
 
@@ -119,6 +151,24 @@ function publishCommand(item_id, command) {
   }
 }
 
+// Used to resume automatic PID control for clin / clin_heater
+function publishResumeAuto(item_id) {
+  if (item_id !== "clin" && item_id !== "clin_heater") return false;
+  if (!client || !client.connected) {
+    console.warn(`[MQTT] publishResumeAuto: MQTT client not connected, cannot resume auto for ${item_id}`);
+    return false;
+  }
+  const topic = `plant/esp2/${item_id}/override_cmd`;
+  try {
+    client.publish(topic, JSON.stringify({ command: "auto" }));
+    console.log(`[MQTT] Published resume auto to ${topic}`);
+    return true;
+  } catch (e) {
+    console.error(`[MQTT] publishResumeAuto: failed to publish for ${item_id}:`, e.message || e);
+    return false;
+  }
+}
+
 // Used by the material dispensing routes (Feature B, Architecture v5)
 function publishTarget(item_id, target) {
   const item = findItem(item_id);
@@ -137,4 +187,4 @@ function publishTarget(item_id, target) {
   }
 }
 
-module.exports = { connect, isConnected, publishCommand, publishTarget };
+module.exports = { connect, isConnected, publishCommand, publishResumeAuto, publishTarget };

@@ -56,7 +56,6 @@
     Ch 4  conveyor_3               -> GPIO14    Ch 11 vibration_motor         -> GPIO23
     Ch 5  conveyor_4               -> GPIO16    Ch 12 ball_mill_1             -> GPIO32
     Ch 6  clin                     -> GPIO17    Ch 13 ball_mill_2             -> GPIO33
-    Ch 7  clin_heater              -> GPIO18
 
     DHT11 (clin_dht)              -> GPIO25 (10k pull-up to 3.3V)
     DHT11 (cooler_dht)            -> GPIO26 (10k pull-up to 3.3V)
@@ -71,7 +70,7 @@
 
   MQTT topics:
     Actuators (per channel, e.g. "conveyor_1"):
-      plant/esp2/conveyor_1/cmd            -> subscribed command  { "command": "on" | "off" }
+      plant/esp2/conveyor_1/cmd            -> subscribed command  { "command": "on" | "off" | "auto" }
       plant/esp2/conveyor_1                -> published state      { "value": "on" | "off" }
     Sensors:
       plant/esp2/clin_dht_temp             -> { "value": 32.5, "unit": "C" }
@@ -81,6 +80,13 @@
       plant/esp2/preheating_tower_dht_temp     -> { "value": 34.0, "unit": "C" }
       plant/esp2/preheating_tower_dht_humidity -> { "value": 36,   "unit": "%" }
       plant/esp2/vibration_sensor          -> { "value": 1,    "unit": "/8" }
+    Device / PID status:
+      plant/esp2/status                    -> { "value": "online" | "offline" } (LWT + on-connect)
+      plant/esp2/clin/manual_override      -> { "value": true | false }  (retained)
+      plant/esp2/clin_heater/manual_override -> { "value": true | false } (retained)
+    Override resume (subscribed, sent by backend dashboard):
+      plant/esp2/clin/override_cmd         -> { "command": "auto" }
+      plant/esp2/clin_heater/override_cmd  -> { "command": "auto" }
 */
 
 #include <WiFi.h>
@@ -102,12 +108,27 @@ constexpr char MQTT_CLIENT_ID[] = "esp2-relay";
 
 constexpr uint32_t MQTT_RECONNECT_DELAY_MS = 2000UL;
 constexpr uint32_t STATE_REPUBLISH_MS      = 10000UL; // periodic relay "still on/off" heartbeat
-constexpr uint32_t SENSOR_PUBLISH_MS       = 5000UL;  // DHT + vibration publish interval
+constexpr uint32_t DHT_READ_MS             = 2000UL;  // DHT + vibration publish interval (2s for PID)
 
 constexpr bool RELAY_ACTIVE_LOW = true;  // Active-LOW relay module: LOW = coil energized (NO closes / ON), HIGH = coil de-energized (NO opens / OFF)
 
-// Clin Area Temperature Control Threshold (deg C) - easily change this target value anytime:
-constexpr float CLIN_TEMP_THRESHOLD = 35.0f;
+// ============================================================================
+// ---------------------- PID TEMPERATURE CONTROL CONFIG ----------------------
+// ============================================================================
+// These are the only values you need to change to tune the PID behaviour.
+// The PID controls clin_heater ON/OFF duty within a 10-second window:
+//   ON time (ms) = (pid_output / 255) * PID_PERIOD_MS
+//   When heater is OFF during the window, the clin motor runs instead.
+//
+// Kd is intentionally small: DHT11 gives integer-step readings (e.g. 34->35°C),
+// which produce sharp derivative spikes. A high Kd would cause the heater to
+// overreact to a single 1°C jump.
+//
+constexpr float    PID_SETPOINT   = 35.0f;   // Target clin area temperature (°C)
+constexpr float    PID_KP         = 2.0f;    // Proportional gain
+constexpr float    PID_KI         = 0.1f;    // Integral gain
+constexpr float    PID_KD         = 0.05f;   // Derivative gain (low — DHT11 integer steps)
+constexpr uint32_t PID_PERIOD_MS  = 10000UL; // Duty-cycle window length (10 seconds)
 
 // ============================================================================
 // ------------------------------ RELAY CHANNELS -------------------------------
@@ -121,7 +142,7 @@ struct RelayChannel {
 // 13 active channels (channels 14-16 are spare - GPIO budget now fully used, see note at bottom of file)
 RelayChannel relays[13] = {
   { "crusher",                22  },  // channel 1  - drives all 3 N20 motors together
-  { "conveyor_1",             12  },  // channel 2
+  { "conveyor_1",             27  },  // channel 2
   { "conveyor_2",             23 },  // channel 3
   { "conveyor_3",             19 },  // channel 4
   { "conveyor_4",             13 },  // channel 5
@@ -147,7 +168,7 @@ DHT clinDht(CLIN_DHT_PIN, DHT_TYPE);
 DHT coolerDht(COOLER_DHT_PIN, DHT_TYPE);
 DHT preheatDht(PREHEAT_DHT_PIN, DHT_TYPE);
 
-#define VIBRATION_SENSOR_PIN 27  // (removed - replaced below with analog sensor on ADC pin 34)
+#define VIBRATION_SENSOR_PIN 34  // (removed - replaced below with analog sensor on ADC pin 34)
 
 // Analog vibration sensor configuration (replaces the old digital placeholder)
 // Wiring:
@@ -172,10 +193,26 @@ PubSubClient mqtt(espClient);
 
 unsigned long lastReconnectAttemptMs = 0;
 unsigned long lastStateRepublishMs   = 0;
-unsigned long lastSensorPublishMs    = 0;
+unsigned long lastDhtReadMs          = 0; // 2s for PID
 
 String topicState(const char *item_id) { return String("plant/esp2/") + item_id; }
 String topicCmd(const char *item_id)   { return String("plant/esp2/") + item_id + "/cmd"; }
+
+// ============================================================================
+// ----------------------------- PID STATE ------------------------------------
+// ============================================================================
+float    pidIntegral       = 0.0f;
+float    pidPrevError      = 0.0f;
+float    latestClinTemp    = NAN;    // most recent valid clin DHT reading
+uint8_t  pidOutput         = 128;   // 0-255; start at midpoint (50% duty)
+uint32_t pidOnDurationMs   = PID_PERIOD_MS / 2;
+unsigned long pidWindowStartMs = 0; // millis() when current 10s window began
+
+// ============================================================================
+// ------------------------- MANUAL OVERRIDE STATE ----------------------------
+// ============================================================================
+bool clinManualOverride    = false;
+bool heaterManualOverride  = false;
 
 // ============================================================================
 // --------------------------------- WIFI -------------------------------------
@@ -228,10 +265,47 @@ RelayChannel *findRelay(const char *item_id) {
 }
 
 // ============================================================================
+// ------------------------ MANUAL OVERRIDE HELPERS ---------------------------
+// ============================================================================
+void publishOverrideStatus(const char *relayId, bool isManual) {
+  char topic[64];
+  snprintf(topic, sizeof(topic), "plant/esp2/%s/manual_override", relayId);
+  StaticJsonDocument<32> doc;
+  doc["value"] = isManual;
+  char payload[32];
+  serializeJson(doc, payload);
+  mqtt.publish(topic, payload, true); // retained
+  Serial.printf("[OVERRIDE] %s -> manual=%s\n", relayId, isManual ? "true" : "false");
+}
+
+// ============================================================================
 // -------------------------------- MQTT CALLBACK ------------------------------
 // ============================================================================
 void mqttCallback(char *topic, byte *payload, unsigned int length) {
   String topicStr(topic);
+
+  // ---- Handle "Resume Auto" override clear commands ----
+  if (topicStr == "plant/esp2/clin/override_cmd" ||
+      topicStr == "plant/esp2/clin_heater/override_cmd") {
+    StaticJsonDocument<48> doc;
+    DeserializationError err = deserializeJson(doc, payload, length);
+    if (err) return;
+    const char *command = doc["command"] | "";
+    if (strcmp(command, "auto") == 0) {
+      if (topicStr == "plant/esp2/clin/override_cmd") {
+        clinManualOverride = false;
+        publishOverrideStatus("clin", false);
+        Serial.println("[OVERRIDE] clin -> PID auto resumed");
+      } else {
+        heaterManualOverride = false;
+        publishOverrideStatus("clin_heater", false);
+        Serial.println("[OVERRIDE] clin_heater -> PID auto resumed");
+      }
+    }
+    return;
+  }
+
+  // ---- Handle normal relay ON/OFF commands ----
   RelayChannel *r = relayForTopic(topicStr);
   if (r == nullptr) return;
 
@@ -252,6 +326,16 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
     return;
   }
 
+  if (strcmp(r->item_id, "clin") == 0) {
+    clinManualOverride = true;
+    publishOverrideStatus("clin", true);
+    Serial.println("[OVERRIDE] clin -> manual override ACTIVE (PID paused)");
+  } else if (strcmp(r->item_id, "clin_heater") == 0) {
+    heaterManualOverride = true;
+    publishOverrideStatus("clin_heater", true);
+    Serial.println("[OVERRIDE] clin_heater -> manual override ACTIVE (PID paused)");
+  }
+
   Serial.printf("[RELAY] %s -> %s\n", r->item_id, r->isOn ? "ON" : "OFF");
   publishRelayState(*r);
 }
@@ -261,6 +345,9 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
 // ============================================================================
 bool mqttConnect() {
   Serial.printf("Connecting to Mosquitto (%s:%u)...\n", MQTT_BROKER_HOST, MQTT_BROKER_PORT);
+
+  // Set LWT BEFORE connect(). Broker publishes "offline" if connection is lost.
+  mqtt.setWill("plant/esp2/status", "{\"value\":\"offline\"}", true, 1);
 
   bool ok = strlen(MQTT_USER) > 0
               ? mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD)
@@ -272,11 +359,26 @@ bool mqttConnect() {
   }
 
   Serial.println("[MQTT] Connected to Mosquitto.");
+
+  // Announce online status immediately
+  mqtt.publish("plant/esp2/status", "{\"value\":\"online\"}", true);
+  Serial.println("[MQTT] Published: plant/esp2/status = online");
+
+  // Subscribe to all relay command topics
   for (uint8_t i = 0; i < NUM_RELAYS; i++) {
     mqtt.subscribe(topicCmd(relays[i].item_id).c_str());
     Serial.printf("[MQTT] Subscribed: %s\n", topicCmd(relays[i].item_id).c_str());
     publishRelayState(relays[i]);
   }
+
+  // Subscribe to manual override resume topics
+  mqtt.subscribe("plant/esp2/clin/override_cmd");
+  mqtt.subscribe("plant/esp2/clin_heater/override_cmd");
+  Serial.println("[MQTT] Subscribed: override_cmd topics for clin & clin_heater");
+
+  publishOverrideStatus("clin",        clinManualOverride);
+  publishOverrideStatus("clin_heater", heaterManualOverride);
+
   return true;
 }
 
@@ -304,40 +406,9 @@ void readAndPublishSensors() {
   float ct = clinDht.readTemperature();
   float ch = clinDht.readHumidity();
   if (!isnan(ct) && !isnan(ch)) {
+    latestClinTemp = ct;  // keep for PID
     publishValue("clin_dht_temp", ct, "C");
     publishValue("clin_dht_humidity", ch, "%");
-
-    // Automatic Clin & Clin Heater control based on Clin area temp threshold (CLIN_TEMP_THRESHOLD)
-    RelayChannel *clinRelay   = findRelay("clin");
-    RelayChannel *heaterRelay = findRelay("clin_heater");
-
-    if (clinRelay && heaterRelay) {
-      if (ct >= CLIN_TEMP_THRESHOLD) {
-        // At or above threshold: turn OFF clin_heater, turn ON clin motor
-        if (heaterRelay->isOn) {
-          Serial.printf("[AUTO-CONTROL] Clin temp %.1fC >= %.1fC -> Turning OFF clin_heater\n", ct, CLIN_TEMP_THRESHOLD);
-          writeRelay(*heaterRelay, false);
-          publishRelayState(*heaterRelay);
-        }
-        if (!clinRelay->isOn) {
-          Serial.printf("[AUTO-CONTROL] Clin temp %.1fC >= %.1fC -> Turning ON clin motor\n", ct, CLIN_TEMP_THRESHOLD);
-          writeRelay(*clinRelay, true);
-          publishRelayState(*clinRelay);
-        }
-      } else {
-        // Below threshold: turn OFF clin motor, turn ON clin_heater
-        if (clinRelay->isOn) {
-          Serial.printf("[AUTO-CONTROL] Clin temp %.1fC < %.1fC -> Turning OFF clin motor\n", ct, CLIN_TEMP_THRESHOLD);
-          writeRelay(*clinRelay, false);
-          publishRelayState(*clinRelay);
-        }
-        if (!heaterRelay->isOn) {
-          Serial.printf("[AUTO-CONTROL] Clin temp %.1fC < %.1fC -> Turning ON clin_heater\n", ct, CLIN_TEMP_THRESHOLD);
-          writeRelay(*heaterRelay, true);
-          publishRelayState(*heaterRelay);
-        }
-      }
-    }
   } else {
     Serial.println("[SENSOR] clin_dht read failed");
   }
@@ -360,7 +431,6 @@ void readAndPublishSensors() {
     Serial.println("[SENSOR] preheating_tower_dht read failed");
   }
 
-  // Read analog vibration sensor over a short window and convert to g
   unsigned long startMillis = millis();
   int maxRawPeak = MOTOR_OFF_BASELINE;
   while (millis() - startMillis < sampleWindow) {
@@ -373,8 +443,72 @@ void readAndPublishSensors() {
   float vibrationG = peakVoltage / REALISTIC_SENSITIVITY;
   publishValue("vibration_sensor", vibrationG, "g");
 
-  Serial.printf("[SENSOR] clin: %.1fC %.0f%%  cooler: %.1fC %.0f%%  preheat: %.1fC %.0f%%  vib: %.3fg\n",
-                ct, ch, ot, oh, pt, ph, vibrationG);
+  if (!isnan(ct)) {
+    Serial.printf("[SENSOR] clin: %.1fC %.0f%%  cooler: %.1fC %.0f%%  preheat: %.1fC %.0f%%  vib: %.3fg\n",
+                  ct, ch, ot, oh, pt, ph, vibrationG);
+  }
+}
+
+// ============================================================================
+// --------------------------- PID CONTROL LOGIC ------------------------------
+// ============================================================================
+void computePidWindow() {
+  if (isnan(latestClinTemp)) {
+    Serial.println("[PID] No valid clin temp yet, skipping window");
+    return;
+  }
+
+  float error      = PID_SETPOINT - latestClinTemp;
+  pidIntegral     += error;
+
+  const float integralMax = 255.0f / PID_KI;
+  if (pidIntegral >  integralMax) pidIntegral =  integralMax;
+  if (pidIntegral < -integralMax) pidIntegral = -integralMax;
+
+  float derivative = error - pidPrevError;
+  pidPrevError     = error;
+
+  float rawOutput  = PID_KP * error + PID_KI * pidIntegral + PID_KD * derivative;
+
+  if (rawOutput > 255.0f) rawOutput = 255.0f;
+  if (rawOutput <   0.0f) rawOutput =   0.0f;
+  pidOutput = (uint8_t)rawOutput;
+
+  pidOnDurationMs = (uint32_t)((pidOutput / 255.0f) * (float)PID_PERIOD_MS);
+
+  Serial.printf("[PID] temp=%.1fC setpoint=%.1fC err=%.1f integ=%.2f deriv=%.2f out=%u onTime=%ums\n",
+                latestClinTemp, PID_SETPOINT, error, pidIntegral, derivative, pidOutput, pidOnDurationMs);
+}
+
+void applyPidControl() {
+  if (clinManualOverride && heaterManualOverride) return;
+
+  unsigned long now     = millis();
+  unsigned long elapsed = now - pidWindowStartMs;
+
+  bool heaterShouldBeOn = (elapsed < pidOnDurationMs);
+  bool clinShouldBeOn   = !heaterShouldBeOn;
+
+  RelayChannel *heaterRelay = findRelay("clin_heater");
+  RelayChannel *clinRelay   = findRelay("clin");
+
+  if (!heaterManualOverride && heaterRelay) {
+    if (heaterRelay->isOn != heaterShouldBeOn) {
+      writeRelay(*heaterRelay, heaterShouldBeOn);
+      publishRelayState(*heaterRelay);
+      Serial.printf("[PID-RELAY] clin_heater -> %s (elapsed=%lums onTime=%ums)\n",
+                    heaterShouldBeOn ? "ON" : "OFF", elapsed, pidOnDurationMs);
+    }
+  }
+
+  if (!clinManualOverride && clinRelay) {
+    if (clinRelay->isOn != clinShouldBeOn) {
+      writeRelay(*clinRelay, clinShouldBeOn);
+      publishRelayState(*clinRelay);
+      Serial.printf("[PID-RELAY] clin -> %s (elapsed=%lums onTime=%ums)\n",
+                    clinShouldBeOn ? "ON" : "OFF", elapsed, pidOnDurationMs);
+    }
+  }
 }
 
 // ============================================================================
@@ -387,18 +521,19 @@ void setup() {
 
   for (uint8_t i = 0; i < NUM_RELAYS; i++) {
     pinMode(relays[i].pin, OUTPUT);
-    writeRelay(relays[i], false); // everything starts OFF for safety
+    writeRelay(relays[i], false);
   }
 
   clinDht.begin();
   coolerDht.begin();
   preheatDht.begin();
-  // Configure ADC attenuation for the analog vibration sensor
   analogSetAttenuation(ADC_11db);
 
   initWiFi();
   mqtt.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
   mqtt.setCallback(mqttCallback);
+
+  pidWindowStartMs = millis();
 
   Serial.println("=== Setup complete ===\n");
 }
@@ -426,20 +561,17 @@ void loop() {
     }
   }
 
-  if (mqtt.connected() && now - lastSensorPublishMs >= SENSOR_PUBLISH_MS) {
-    lastSensorPublishMs = now;
+  if (mqtt.connected() && now - lastDhtReadMs >= DHT_READ_MS) {
+    lastDhtReadMs = now;
     readAndPublishSensors();
   }
-}
 
-/*
-  ========================= SPARE CHANNELS 14-16 NOTE =========================
-  Channels 1-13 plus the 3 DHT11 sensors and the vibration sensor already use
-  every safe-ish GPIO available on a standard ESP32 (avoiding boot-critical
-  strapping pins 0/2/12, input-only pins 34-39, and the flash-reserved 6-11
-  range) - the third DHT11 (preheating_tower_dht) had to use GPIO15, the one
-  remaining lower-risk strapping pin (see NOTE ON GPIO15 near the top of this
-  file). To wire up the remaining 3 spare relay channels later, add an I2C
-  GPIO expander (e.g. a PCF8574) on the existing I2C bus rather than looking
-  for more direct ESP32 pins - there aren't any left on this board.
-*/
+  if (now - pidWindowStartMs >= PID_PERIOD_MS) {
+    pidWindowStartMs = now;
+    computePidWindow();
+  }
+
+  if (mqtt.connected()) {
+    applyPidControl();
+  }
+}

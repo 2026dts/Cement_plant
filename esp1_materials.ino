@@ -265,6 +265,10 @@ bool mqttConnect() {
   Serial.printf("Connecting to Mosquitto (%s:%u)...\n", MQTT_BROKER_HOST, MQTT_BROKER_PORT);
   String clientId = String(MQTT_CLIENT_ID) + "-" + WiFi.macAddress();
   const char *cid = clientId.c_str();
+
+  // Set LWT BEFORE connect(). Mosquitto broker publishes "offline" if connection drops unexpectedly.
+  mqtt.setWill("plant/esp1/status", "{\"value\":\"offline\"}", true, 1);
+
   bool ok;
   if (strlen(MQTT_USER) > 0) {
     ok = mqtt.connect(cid, MQTT_USER, MQTT_PASSWORD);
@@ -278,6 +282,11 @@ bool mqttConnect() {
   }
 
   Serial.println("[MQTT] Connected to Mosquitto.");
+
+  // Announce online status immediately (retained)
+  mqtt.publish("plant/esp1/status", "{\"value\":\"online\"}", true);
+  Serial.println("[MQTT] Published: plant/esp1/status = online");
+
   for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
     mqtt.subscribe(topicTargetCmd(materials[i].item_id).c_str());
     Serial.printf("[MQTT] Subscribed: %s\n", topicTargetCmd(materials[i].item_id).c_str());

@@ -27,6 +27,24 @@ function setDispenseStatus(item_id, status) {
   return updated;
 }
 
+const deviceState = new Map(); // device -> { status, lastSeen }
+
+function setDeviceStatus(device, status) {
+  const updated = { status, lastSeen: Date.now() };
+  deviceState.set(device, updated);
+  return updated;
+}
+
+function getDeviceStatus(device) {
+  return deviceState.get(device) || { status: "unknown", lastSeen: null };
+}
+
+function allDevices() {
+  const out = {};
+  for (const [device, status] of deviceState.entries()) out[device] = status;
+  return out;
+}
+
 function get(item_id) {
   return state.get(item_id) || null;
 }
@@ -37,4 +55,4 @@ function all() {
   return out;
 }
 
-module.exports = { setValue, setDispenseStatus, get, all };
+module.exports = { setValue, setDispenseStatus, setDeviceStatus, getDeviceStatus, allDevices, get, all };
