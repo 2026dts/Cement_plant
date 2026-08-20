@@ -69,4 +69,21 @@ router.post("/item/:id/resume-auto", (req, res) => {
   res.json({ item_id: item.id, status: "auto_resumed" });
 });
 
+// Master Switch route to control all actuators simultaneously
+router.post("/actuators/master", (req, res) => {
+  const { command } = req.body;
+  if (command !== "on" && command !== "off") {
+    return res.status(400).json({ error: 'command must be "on" or "off"' });
+  }
+
+  const result = mqttClient.publishMasterCommand(command);
+  res.json({
+    status: "success",
+    command,
+    publishedCount: result.count,
+    totalActuators: result.total,
+    timestamp: Date.now(),
+  });
+});
+
 module.exports = router;

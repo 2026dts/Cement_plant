@@ -2,6 +2,8 @@ import { useLiveData } from "./hooks/useLiveData.js";
 import Tile from "./components/Tile.jsx";
 import MaterialTargets from "./components/MaterialTargets.jsx";
 import ActuatorControl from "./components/ActuatorControl.jsx";
+import MasterSwitch from "./components/MasterSwitch.jsx";
+import KilnTemperatureMonitor from "./components/KilnTemperatureMonitor.jsx";
 
 const SENSOR_TILES = [
   { id: "limestone", label: "Limestone", source: "esp1" },
@@ -45,7 +47,10 @@ function formatLastSeen(ts) {
 }
 
 export default function App() {
-  const { items, connected, deviceStatus, manualOverrides } = useLiveData();
+  const {
+    items, connected, deviceStatus, manualOverrides,
+    kilnTemperature, refresh, refreshing, resetKilnBaseline,
+  } = useLiveData();
 
   const esp1Info = deviceStatus?.esp1 || { status: "unknown", lastSeen: null };
   const esp1LastSeen = esp1Info.lastSeen || items.esp1_status?.ts;
@@ -65,10 +70,28 @@ export default function App() {
           <h1 className="text-xl font-bold flex items-center gap-2">
             <span className="text-blue-600">&#128200;</span> Cement Plant Control Dashboard
           </h1>
-          <p className="text-xs text-gray-500 mt-0.5">Live PID Control & Hardware Status Monitoring</p>
+          <p className="text-xs text-gray-500 mt-0.5">Live PID Control &amp; Hardware Status Monitoring</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          {/* Refresh Button */}
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            title="Refresh all dashboard data from backend"
+            className="flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 disabled:opacity-60 border border-blue-200 px-3 py-1.5 rounded-xl transition-colors"
+          >
+            <span
+              className={`text-blue-600 text-sm font-bold inline-block ${refreshing ? "animate-spin" : ""}`}
+              style={{ display: "inline-block" }}
+            >
+              ↻
+            </span>
+            <span className="text-xs font-semibold text-blue-700">
+              {refreshing ? "Refreshing…" : "Refresh"}
+            </span>
+          </button>
+
           {/* Backend WS Status */}
           <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 px-3 py-1.5 rounded-xl">
             <span className={`w-2 h-2 rounded-full ${connected ? "bg-emerald-500" : "bg-red-500"}`} />
@@ -128,6 +151,14 @@ export default function App() {
         ))}
       </div>
 
+      {/* Kiln Temperature Monitor */}
+      <div className="mb-6">
+        <KilnTemperatureMonitor
+          kilnTemperature={kilnTemperature}
+          onReset={resetKilnBaseline}
+        />
+      </div>
+
       {/* Material Targets Section */}
       <MaterialTargets />
 
@@ -136,8 +167,13 @@ export default function App() {
         <div className="flex items-center justify-between mb-3">
           <h2 className="font-semibold text-lg">Actuators (ESP2 - 16ch Relay Board)</h2>
           <span className="text-xs text-gray-500 font-medium">
-            PID Auto-Control Active for Klin & Klin Heater (Target 35°C)
+            PID Auto-Control Active for Klin &amp; Klin Heater (Target 35°C)
           </span>
+        </div>
+
+        {/* Master Switch — highest priority control */}
+        <div className="mb-4">
+          <MasterSwitch items={items} />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

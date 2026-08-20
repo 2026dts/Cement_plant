@@ -67,7 +67,7 @@
 constexpr char WIFI_SSID[]     = "ACT-ai_103812010408";
 constexpr char WIFI_PASSWORD[] = "33346558";
 
-constexpr char MQTT_BROKER_HOST[] = "192.168.0.2";   // local Mosquitto machine's LAN IP
+constexpr char MQTT_BROKER_HOST[] = "192.168.0.3";   // local Mosquitto machine's LAN IP
 constexpr uint16_t MQTT_BROKER_PORT = 1883U;
 constexpr char MQTT_USER[]     = "";                  // leave empty if allow_anonymous
 constexpr char MQTT_PASSWORD[] = "";
@@ -223,11 +223,16 @@ void startDispense(MaterialFeed &m, float target) {
     Serial.printf("[DISPENSE BLOCKED] %s: load cell not ready yet, ignoring target/cmd\n", m.item_id);
     return;
   }
-  m.targetGrams = target;
+  float currentWeight = readLoadCellFast(m, 1);
+  if (currentWeight < 0.0f) currentWeight = 0.0f;
+  
+  // Calculate cumulative cutoff target so existing material on load cell is preserved
+  // (e.g., 5g existing + 5g new target = 10g total cutoff weight)
+  m.targetGrams = currentWeight + target;
   m.dispensing  = true;
   m.servo.write(SERVO_MAX_ANGLE);   // Servo opens / moves to MAX position (140 deg)
-  Serial.printf("\n[DISPENSE START] %s: target=%.1fg, servo -> MAX (%d deg)\n",
-                m.item_id, target, SERVO_MAX_ANGLE);
+  Serial.printf("\n[DISPENSE START] %s: added target=%.1fg, initial weight=%.1fg, cumulative target=%.1fg, servo -> MAX (%d deg)\n",
+                m.item_id, target, currentWeight, m.targetGrams, SERVO_MAX_ANGLE);
   publishTargetStatus(m, "dispensing");
 }
 

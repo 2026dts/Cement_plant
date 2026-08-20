@@ -126,6 +126,22 @@ function connect(onUpdate) {
     }
     const updated = store.setValue(item.id, value, payload.unit || item.unit);
     if (onUpdateCallback) onUpdateCallback(item.id, { ...updated, deviceSource: item.source, deviceStatus: devStatus });
+
+    // Kiln temperature tracking: whenever klin_dht_temp or klin_heater changes,
+    // update the baseline/live tracking and broadcast the full kiln temp object.
+    if (item.id === "klin_dht_temp" || item.id === "klin_heater") {
+      const currentTemp = store.get("klin_dht_temp")?.value ?? null;
+      const heaterState = store.get("klin_heater")?.value ?? "off";
+      const kilnTempData = store.updateKilnTemperature({ currentTemp, heaterState });
+      if (onUpdateCallback) {
+        onUpdateCallback("klin_temp_monitor", {
+          item_id: "klin_temp_monitor",
+          value: kilnTempData,
+          unit: "C",
+          ts: Date.now(),
+        });
+      }
+    }
   });
 }
 
@@ -169,17 +185,18 @@ function publishResumeAuto(item_id) {
   }
 }
 
-// Used by the material dispensing routes (Feature B, Architecture v5)
+// Used by the material target routes to start a dispense cycle
 function publishTarget(item_id, target) {
   const item = findItem(item_id);
-  if (!item || !item.dispensable) return false;
+  if (!item || !item.dispensable || typeof target !== "number" || !Number.isFinite(target) || target < 0) {
+    return false;
+  }
   if (!client || !client.connected) {
-    console.warn(`[MQTT] publishTarget: MQTT client not connected, cannot send target for ${item_id}`);
+    console.warn(`[MQTT] publishTarget: MQTT client not connected, cannot publish target for ${item_id}`);
     return false;
   }
   try {
     client.publish(topicTargetCmd(item), JSON.stringify({ target }));
-    console.log(`[MQTT] Published target ${target} to ${topicTargetCmd(item)}`);
     return true;
   } catch (e) {
     console.error(`[MQTT] publishTarget: failed to publish for ${item_id}:`, e.message || e);
@@ -187,4 +204,31 @@ function publishTarget(item_id, target) {
   }
 }
 
-module.exports = { connect, isConnected, publishCommand, publishResumeAuto, publishTarget };
+// Used by the Master Switch route to control all actuators at once
+function publishMasterCommand(command) {
+  if (command !== "on" && command !== "off") return { count: 0, success: false };
+  const actuators = ITEM_REGISTRY.filter((item) => item.type === "actuator");
+  let publishedCount = 0;
+
+  actuators.forEach((item) => {
+    const wireCommand = ACTUATOR_LOGIC_INVERTED ? invertOnOff(command) : command;
+    if (client && client.connected) {
+      try {
+        client.publish(topicCmd(item), JSON.stringify({ command: wireCommand }));
+        publishedCount++;
+      } catch (e) {
+        console.error(`[MQTT] publishMasterCommand failed for ${item.id}:`, e.message || e);
+      }
+    }
+    // Update local state and trigger WebSocket broadcast for immediate UI response
+    const updated = store.setValue(item.id, command, "on/off");
+    if (onUpdateCallback) {
+      onUpdateCallback(item.id, { ...updated, deviceSource: item.source });
+    }
+  });
+
+  console.log(`[MQTT] Master Switch executed: ${command.toUpperCase()} on ${publishedCount}/${actuators.length} actuators`);
+  return { count: publishedCount, total: actuators.length, success: publishedCount > 0 };
+}
+
+module.exports = { connect, isConnected, publishCommand, publishMasterCommand, publishResumeAuto, publishTarget };

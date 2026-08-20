@@ -55,4 +55,50 @@ function all() {
   return out;
 }
 
-module.exports = { setValue, setDispenseStatus, setDeviceStatus, getDeviceStatus, allDevices, get, all };
+// ---- Kiln Temperature Baseline Tracking -----------------------------------
+// startingTemp is captured the moment klin_heater is turned ON for the first
+// time (or when the dashboard explicitly resets the baseline).
+// afterHeaterTemp is updated continuously from MQTT klin_dht_temp readings.
+let kilnTemperature = {
+  startingTemp: null,    // °C — snapshot taken just before heater kicked in
+  afterHeaterTemp: null, // °C — continuously updated live reading
+  startingTs: null,      // timestamp when baseline was captured
+  heaterWasOn: false,    // track previous heater state to detect ON edge
+};
+
+function updateKilnTemperature({ currentTemp, heaterState }) {
+  // Detect heater turning ON → capture baseline if not already set
+  const heaterNowOn = heaterState === "on";
+  if (heaterNowOn && !kilnTemperature.heaterWasOn && kilnTemperature.startingTemp === null) {
+    kilnTemperature.startingTemp = currentTemp;
+    kilnTemperature.startingTs = Date.now();
+  }
+  kilnTemperature.heaterWasOn = heaterNowOn;
+
+  // Always update the live after-heater reading when heater is on
+  if (heaterNowOn && currentTemp !== null) {
+    kilnTemperature.afterHeaterTemp = currentTemp;
+  }
+
+  return { ...kilnTemperature };
+}
+
+function resetKilnBaseline() {
+  kilnTemperature.startingTemp = null;
+  kilnTemperature.startingTs = null;
+  kilnTemperature.afterHeaterTemp = null;
+  kilnTemperature.heaterWasOn = false;
+  return { ...kilnTemperature };
+}
+
+function getKilnTemperature() {
+  return { ...kilnTemperature };
+}
+
+module.exports = {
+  setValue, setDispenseStatus,
+  setDeviceStatus, getDeviceStatus, allDevices,
+  get, all,
+  updateKilnTemperature, resetKilnBaseline, getKilnTemperature,
+};
+

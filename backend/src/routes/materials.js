@@ -47,7 +47,6 @@ router.post("/item/:id/target", (req, res) => {
     return res.status(400).json({ error: "target must be a number" });
   }
 
-  mqttClient.publishTarget(item.id, target);
   const ok = mqttClient.publishTarget(item.id, target);
   if (!ok) return res.status(500).json({ error: "Failed to publish target to MQTT broker" });
   res.json({ item_id: item.id, target });
