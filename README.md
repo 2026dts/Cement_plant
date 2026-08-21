@@ -42,6 +42,21 @@ Wiring/pin tables are in the comment block at the top of each file.
   from the machine you run the backend on
 - ESP32 boards flashed with the firmware, pointed at the same Mosquitto broker
 
+## Run everything with one command (Windows)
+
+From the project root, run:
+
+```powershell
+.\start.ps1
+```
+
+The script installs missing Node dependencies, then starts the backend, dashboard,
+and widget server together. Open `http://localhost:5173` for the dashboard and
+use `http://localhost:4173/widget.html?id=iron_ore` for a widget page. Press
+`Ctrl+C` once to stop all three services.
+
+Use `.\start.ps1 -SkipInstall` after dependencies have already been installed.
+
 ## 1. Backend
 
 ```bash

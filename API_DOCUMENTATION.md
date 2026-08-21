@@ -271,7 +271,7 @@ Materials / sensors (inline value):
 
 Gate Actuator (separate ON/OFF/OPEN/CLOSE URLs):
   open.html?id=raw_material_gate
-  close.html?id=raw_material_gate
+  cd cd 
 
 Actuators (separate ON/OFF URLs per actuator):
   on.html?id=crusher
