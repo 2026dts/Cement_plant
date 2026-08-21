@@ -84,6 +84,27 @@ router.get("/item/:id/action/close", (req, res) => {
   res.type("text/plain").send(`${item.id.toUpperCase()}: CLOSE`);
 });
 
+// Dedicated separate ON/OFF/OPEN/CLOSE endpoints
+router.all(["/item/:id/on", "/item/:id/off", "/item/:id/open", "/item/:id/close"], (req, res) => {
+  const item = assertActuator(req, res);
+  if (!item) return;
+  
+  const pathAction = req.path.split("/").pop(); // "on", "off", "open", "close"
+  if (item.gate && (pathAction === "on" || pathAction === "off")) {
+    return res.status(400).json({ error: "Use /open or /close for gate actuators" });
+  }
+  if (!item.gate && (pathAction === "open" || pathAction === "close")) {
+    return res.status(400).json({ error: "Only gate actuators support /open and /close" });
+  }
+
+  mqttClient.publishCommand(item.id, pathAction);
+  
+  if (req.headers.accept && req.headers.accept.includes("application/json")) {
+    return res.json({ item_id: item.id, command: pathAction });
+  }
+  res.type("text/plain").send(`${item.id.toUpperCase()}: ${pathAction.toUpperCase()}`);
+});
+
 router.post("/item/:id/resume-auto", (req, res) => {
   const item = assertActuator(req, res);
   if (!item) return;

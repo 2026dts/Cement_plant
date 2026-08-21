@@ -95,10 +95,22 @@ function getKilnTemperature() {
   return { ...kilnTemperature };
 }
 
+let masterOverrideActive = false;
+
+function setMasterOverrideActive(active) {
+  masterOverrideActive = !!active;
+  return masterOverrideActive;
+}
+
+function isMasterOverrideActive() {
+  return masterOverrideActive;
+}
+
 module.exports = {
   setValue, setDispenseStatus,
   setDeviceStatus, getDeviceStatus, allDevices,
   get, all,
   updateKilnTemperature, resetKilnBaseline, getKilnTemperature,
+  setMasterOverrideActive, isMasterOverrideActive,
 };
 

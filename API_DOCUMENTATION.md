@@ -109,20 +109,26 @@ button exists to click.
 
 ### `GET /api/item/:id/action/on`
 ### `GET /api/item/:id/action/off`
-### `GET /api/item/raw_material_gate/action/open`
-### `GET /api/item/raw_material_gate/action/close`
-Fire an ON or OFF command immediately, no request body. Built for Cupola:
+### `GET /api/item/:id/action/open`
+### `GET /api/item/:id/action/close`
+### `GET /api/item/:id/on`
+### `GET /api/item/:id/off`
+### `GET /api/item/:id/open`
+### `GET /api/item/:id/close`
+Fire an ON, OFF, OPEN, or CLOSE command immediately. Built for Cupola:
 
-- **Link-type hotspot**: paste this URL directly into the hotspot's embed
-  field. Opening the URL fires the command and shows a short confirmation.
-- **Embed-type hotspot**: `control.html` (see Section 4) calls these
-  internally when its ON/OFF buttons are tapped.
+- **Separate Widget Pages (`widget-frontend/`)**:
+  - `on.html?id=<item_id>` -> Dedicated single ON button widget.
+  - `off.html?id=<item_id>` -> Dedicated single OFF button widget.
+  - `open.html?id=<item_id>` -> Dedicated single OPEN button widget.
+  - `close.html?id=<item_id>` -> Dedicated single CLOSE button widget.
+- **Link-type hotspot**: paste this URL directly into the hotspot's embed field. Opening the URL fires the command and shows a short confirmation.
 
 **Response 200** (`text/plain`)
 ```
 CRUSHER: ON
 ```
-**Response 400** — `:id` is not an actuator.
+**Response 400** — `:id` is not an actuator or unsupported action.
 **Response 404** — unknown `item_id`.
 
 > **Security note**: these are plain GET requests that change state — fine
@@ -255,20 +261,27 @@ Materials / sensors (inline value):
   widget.html?id=clay
   widget.html?id=iron_ore
   widget.html?id=sand
-  control.html?id=raw_material_gate&action=open
-  control.html?id=raw_material_gate&action=close
-  widget.html?id=clin_dht_temp
-  widget.html?id=clin_dht_humidity
+  widget.html?id=klin_dht_temp
+  widget.html?id=klin_dht_humidity
   widget.html?id=cooler_dht_temp
   widget.html?id=cooler_dht_humidity
   widget.html?id=preheating_tower_dht_temp
   widget.html?id=preheating_tower_dht_humidity
   widget.html?id=vibration_sensor
 
-Actuators (pick Style A or Style B per actuator, see above):
-  crusher, conveyor_1, conveyor_2, conveyor_3, conveyor_4, clin, clin_heater,
-  heat_blower, preheating_tower_fan, preheating_tower_heater, vibration_motor,
-  ball_mill_1, ball_mill_2
+Gate Actuator (separate ON/OFF/OPEN/CLOSE URLs):
+  open.html?id=raw_material_gate
+  close.html?id=raw_material_gate
+
+Actuators (separate ON/OFF URLs per actuator):
+  on.html?id=crusher
+  off.html?id=crusher
+  (available for: crusher, conveyor_1, conveyor_2, conveyor_3, conveyor_4,
+   klin, klin_heater, heat_blower, preheating_tower_fan, preheating_tower_heater,
+   vibration_motor, ball_mill_1, ball_mill_2)
+
+Combined dual-button control (optional):
+  control.html?id=<item_id>
 ```
 
 ---
