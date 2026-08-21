@@ -1,6 +1,6 @@
 // Actuator control routes - Architecture v5, Section 5 (Feature C).
 //
-// POST /api/item/:id/action   { command: "on" | "off" }
+// POST /api/item/:id/action   { command: "on" | "off" } or { command: "open" | "close" }
 //   Used by the Dashboard, where a real button + click handler exists.
 //
 // GET /api/item/:id/action/on
@@ -32,13 +32,20 @@ function assertActuator(req, res) {
   return item;
 }
 
+function isValidCommand(item, command) {
+  if (item.gate) return command === "open" || command === "close";
+  return command === "on" || command === "off";
+}
+
 router.post("/item/:id/action", (req, res) => {
   const item = assertActuator(req, res);
   if (!item) return;
 
   const { command } = req.body;
-  if (command !== "on" && command !== "off") {
-    return res.status(400).json({ error: 'command must be "on" or "off"' });
+  if (!isValidCommand(item, command)) {
+    return res.status(400).json({ error: item.gate
+      ? 'command must be "open" or "close"'
+      : 'command must be "on" or "off"' });
   }
 
   mqttClient.publishCommand(item.id, command);
@@ -48,6 +55,7 @@ router.post("/item/:id/action", (req, res) => {
 router.get("/item/:id/action/on", (req, res) => {
   const item = assertActuator(req, res);
   if (!item) return;
+  if (item.gate) return res.status(400).send("Use open/close for gate actuators");
   mqttClient.publishCommand(item.id, "on");
   res.type("text/plain").send(`${item.id.toUpperCase()}: ON`);
 });
@@ -55,8 +63,25 @@ router.get("/item/:id/action/on", (req, res) => {
 router.get("/item/:id/action/off", (req, res) => {
   const item = assertActuator(req, res);
   if (!item) return;
+  if (item.gate) return res.status(400).send("Use open/close for gate actuators");
   mqttClient.publishCommand(item.id, "off");
   res.type("text/plain").send(`${item.id.toUpperCase()}: OFF`);
+});
+
+router.get("/item/:id/action/open", (req, res) => {
+  const item = assertActuator(req, res);
+  if (!item) return;
+  if (!item.gate) return res.status(400).send("Only gate actuators support open/close");
+  mqttClient.publishCommand(item.id, "open");
+  res.type("text/plain").send(`${item.id.toUpperCase()}: OPEN`);
+});
+
+router.get("/item/:id/action/close", (req, res) => {
+  const item = assertActuator(req, res);
+  if (!item) return;
+  if (!item.gate) return res.status(400).send("Only gate actuators support open/close");
+  mqttClient.publishCommand(item.id, "close");
+  res.type("text/plain").send(`${item.id.toUpperCase()}: CLOSE`);
 });
 
 router.post("/item/:id/resume-auto", (req, res) => {

@@ -1,9 +1,10 @@
-# ESP32 Digital Twin Platform — Full Code (Hardware Revision: 5x Load Cell/Servo + 16ch Relay + Sensors)
+# ESP32 Digital Twin Platform — Full Code (Hardware Revision: 4x Load Cell/Servo + Raw Gate + 16ch Relay + Sensors)
 
 Everything needed to run the platform end-to-end on the current hardware:
 
-- **ESP32-1**: 5 load cells (common SCK) + 5 servos — limestone, clay, iron_ore,
-  sand, raw_material — each pair does closed-loop dispensing to a target weight.
+- **ESP32-1**: 4 load cells (common SCK) + 4 dispensing servos — limestone, clay,
+  iron_ore, and sand — plus a raw-material gate servo on GPIO25 with open/close
+  control.
 - **ESP32-2**: 16-channel relay board (2x8), 13 channels wired — crusher (gangs
   3 N20 motors), conveyor_1-4, clin, clin_heater, heat_blower, preheating_tower_fan,
   preheating_tower_heater, vibration_motor, ball_mill_1, ball_mill_2 — plus 3x
@@ -102,7 +103,8 @@ widget.html?id=limestone
 widget.html?id=clay
 widget.html?id=iron_ore
 widget.html?id=sand
-widget.html?id=raw_material
+control.html?id=raw_material_gate&action=open
+control.html?id=raw_material_gate&action=close
 ```
 
 Sensor value labels (inline, plain text):

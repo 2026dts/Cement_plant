@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { API_BASE } from "../config.js";
 
-// One hopper, one card: its own input and its own "Dispense" button, using
-// the single-item POST /api/item/:id/target endpoint. Each hopper's servo
+// One material feed, one card: its own input and its own "Dispense" button, using
+// the single-item POST /api/item/:id/target endpoint. Each feed's servo
 // starts dispensing on its own click and stops automatically once its load
 // cell reports the target weight (Architecture v5, Section 4).
 const MATERIALS = [
@@ -10,7 +10,6 @@ const MATERIALS = [
   { id: "clay", label: "Clay" },
   { id: "iron_ore", label: "Iron Ore" },
   { id: "sand", label: "Sand" },
-  { id: "raw_material", label: "Raw Material" },
 ];
 
 function HopperCard({ id, label }) {

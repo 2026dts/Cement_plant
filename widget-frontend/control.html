@@ -97,14 +97,16 @@
 
     const params = new URLSearchParams(window.location.search);
     const itemId = params.get("id");
-    const action = params.get("action"); // "on" | "off" | absent
+    const action = params.get("action"); // "on" | "off" | "open" | "close" | absent
+    const isGate = itemId === "raw_material_gate";
+    const commands = isGate ? ["open", "close"] : ["on", "off"];
     const root = document.getElementById("root");
 
     const powerIcon = `<svg viewBox="0 0 24 24"><path d="M12 2v8" stroke-linecap="round"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0" stroke-linecap="round"/></svg>`;
 
     if (!itemId) {
       root.innerHTML = `<span id="status">missing ?id=</span>`;
-    } else if (action === "on" || action === "off") {
+    } else if (commands.includes(action)) {
       // STYLE B: link-type hotspot - fire immediately, no buttons.
       root.innerHTML = `<span id="status">sending...</span>`;
       fetch(`${API_BASE}/api/item/${itemId}/action/${action}`)
@@ -115,8 +117,8 @@
       // STYLE A: embed-type hotspot - persistent ON/OFF buttons, live-highlighted.
       root.innerHTML = `
         <div id="buttons">
-          <button class="power-btn on" id="btnOn" aria-label="Turn on">${powerIcon}</button>
-          <button class="power-btn off" id="btnOff" aria-label="Turn off">${powerIcon}</button>
+          <button class="power-btn on" id="btnOn" aria-label="${commands[0]}">${powerIcon}</button>
+          <button class="power-btn off" id="btnOff" aria-label="${commands[1]}">${powerIcon}</button>
           <span id="label">${itemId}</span>
         </div>
       `;
@@ -125,9 +127,9 @@
       const btnOff = document.getElementById("btnOff");
 
       function setActive(state) {
-        // state is "on", "off", or null/unknown (nothing highlighted yet)
-        btnOn.classList.toggle("active", state === "on");
-        btnOff.classList.toggle("active", state === "off");
+        // state is one of the actuator commands, or null/unknown.
+        btnOn.classList.toggle("active", state === commands[0]);
+        btnOff.classList.toggle("active", state === commands[1]);
       }
 
       function sendCommand(cmd) {
@@ -135,8 +137,8 @@
         fetch(`${API_BASE}/api/item/${itemId}/action/${cmd}`).catch(() => {});
       }
 
-      btnOn.addEventListener("click", () => sendCommand("on"));
-      btnOff.addEventListener("click", () => sendCommand("off"));
+      btnOn.addEventListener("click", () => sendCommand(commands[0]));
+      btnOff.addEventListener("click", () => sendCommand(commands[1]));
 
       // Initial snapshot so the correct button is highlighted before any
       // WebSocket message arrives.

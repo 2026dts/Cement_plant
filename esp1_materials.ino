@@ -1,12 +1,14 @@
 /*
-  ESP32-1 — 5x Load Cell + 5x Servo (Material Dispensing) — Mosquitto MQTT
+  ESP32-1 — 4x Load Cell + 5x Servo (Material Dispensing + Raw Gate) — Mosquitto MQTT
   ==========================================================================
   Hardware on this board:
-    - 5x 20kg load cells (HX711), all sharing ONE common SCK pin, each with
+    - 4x 20kg load cells (HX711), all sharing ONE common SCK pin, each with
       its own DOUT pin.
-    - 5x servo motors, one per load cell, used to hold at max angle while
+    - 4x servo motors, one per load cell, used to hold at max angle while
       material dispenses until the target weight is reached, then the
       servo returns to its home position.
+    - 1x raw-material gate servo on GPIO25, controlled independently with
+      open/close commands.
 
   Calibration factor (96.322) is kept EXACTLY as supplied — do not change
   this value, only re-use it per load cell / servo pair below.
@@ -22,19 +24,21 @@
   Set MQTT_BROKER_HOST below to your local Mosquitto machine's LAN IP.
 
   ================================ WIRING ====================================
-  Shared SCK (all 5 load cells): GPIO 32
+  Shared SCK (all 4 load cells): GPIO 32
 
     Pair 1 - limestone:     DOUT -> GPIO22  | Servo -> GPIO27
     Pair 2 - clay:          DOUT -> GPIO23  | Servo -> GPIO26
     Pair 3 - iron_ore:      DOUT -> GPIO5   | Servo -> GPIO14
     Pair 4 - sand:          DOUT -> GPIO15  | Servo -> GPIO13
-    Pair 5 - raw_material:  DOUT -> GPIO19  | Servo -> GPIO25
+    Raw material gate:                         Servo -> GPIO25
 
   MQTT topics (per material, e.g. "limestone"):
     plant/esp1/limestone                 -> published live weight  { "value": 23.4, "unit": "g" }
     plant/esp1/limestone/target/cmd      -> subscribed target      { "target": 50 }
     plant/esp1/limestone/target/status   -> published status       { "status": "dispensing" | "done" }
     plant/esp1/status                    -> published device status { "value": "online" | "offline" }
+    plant/esp1/raw_material_gate          -> published gate state { "value": "open" | "close" }
+    plant/esp1/raw_material_gate/cmd      -> subscribed gate command { "command": "open" | "close" }
 
   ============================= BOOT / TARE BEHAVIOUR =========================
   At boot, each channel's HX711 is brought up with a bounded timeout instead
@@ -52,7 +56,7 @@
       target weight
     - only then does that specific servo return to SERVO_HOME_ANGLE
   Every material is independent — one material dispensing does not affect any
-  other material's servo/state.
+  other material's servo/state. The raw-material gate is controlled separately.
 */
 
 #include <WiFi.h>
@@ -109,14 +113,16 @@ struct MaterialFeed {
   unsigned long lastInitAttemptMs = 0;
 };
 
-MaterialFeed materials[5] = {
+MaterialFeed materials[4] = {
   { "limestone",    22, 27 },
   { "clay",         23, 26 },
   { "iron_ore",      5, 14 },
-  { "sand",         15, 13 },
-  { "raw_material", 19, 25 },
+  { "sand",          15, 13 },
 };
-constexpr uint8_t NUM_MATERIALS = 5;
+constexpr uint8_t NUM_MATERIALS = 4;
+
+Servo rawMaterialGate;
+bool rawMaterialGateOpen = false;
 
 // ============================================================================
 // ------------------------------- MQTT CLIENT --------------------------------
@@ -130,6 +136,8 @@ unsigned long lastReconnectAttemptMs = 0;
 String topicValue(const char *item_id)        { return String("plant/esp1/") + item_id; }
 String topicTargetCmd(const char *item_id)    { return String("plant/esp1/") + item_id + "/target/cmd"; }
 String topicTargetStatus(const char *item_id) { return String("plant/esp1/") + item_id + "/target/status"; }
+String rawGateStateTopic()                    { return "plant/esp1/raw_material_gate"; }
+String rawGateCmdTopic()                      { return "plant/esp1/raw_material_gate/cmd"; }
 
 // ============================================================================
 // --------------------------------- WIFI -------------------------------------
@@ -207,6 +215,24 @@ void publishValue(const char *item_id, float value, const char *unit) {
   mqtt.publish(topicValue(item_id).c_str(), payload);
 }
 
+void publishRawMaterialGateState() {
+  StaticJsonDocument<48> doc;
+  doc["value"] = rawMaterialGateOpen ? "open" : "close";
+  doc["unit"] = "open/close";
+  char payload[48];
+  serializeJson(doc, payload);
+  mqtt.publish(rawGateStateTopic().c_str(), payload, true);
+}
+
+void setRawMaterialGate(bool open) {
+  rawMaterialGateOpen = open;
+  rawMaterialGate.write(open ? SERVO_MAX_ANGLE : SERVO_HOME_ANGLE);
+  Serial.printf("[RAW MATERIAL GATE] %s -> %d degrees\n",
+                open ? "open" : "close",
+                open ? SERVO_MAX_ANGLE : SERVO_HOME_ANGLE);
+  publishRawMaterialGateState();
+}
+
 // ============================================================================
 // ----------------------- SERVO / DISPENSING CONTROL --------------------------
 // ============================================================================
@@ -245,7 +271,7 @@ void stopDispense(MaterialFeed &m) {
   publishValue(m.item_id, m.lastWeight, "g");
 }
 
-// Dedicated ULTRA-FAST check for active dispensing hoppers.
+// Dedicated ULTRA-FAST check for active dispensing feeds.
 // Runs every single loop tick to detect target threshold INSTANTLY and close servo immediately.
 void checkDispensingFast() {
   for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
@@ -263,7 +289,7 @@ void checkDispensingFast() {
   }
 }
 
-// Background telemetry for idle hoppers
+// Background telemetry for idle material feeds
 void readAndPublishTelemetry() {
   for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
     MaterialFeed &m = materials[i];
@@ -310,6 +336,26 @@ MaterialFeed *materialForTopic(const String &topic) {
 void mqttCallback(char *topic, byte *payload, unsigned int length) {
   Serial.printf("[MQTT RX] %s -> %.*s\n", topic, length, (char *)payload);
   String topicStr(topic);
+
+  if (topicStr == rawGateCmdTopic()) {
+    StaticJsonDocument<64> gateDoc;
+    DeserializationError gateErr = deserializeJson(gateDoc, payload, length);
+    if (gateErr) {
+      Serial.printf("[MQTT] Bad JSON on %s: %s\n", topic, gateErr.c_str());
+      return;
+    }
+
+    const char *command = gateDoc["command"] | "";
+    if (strcmp(command, "open") == 0) {
+      setRawMaterialGate(true);
+    } else if (strcmp(command, "close") == 0) {
+      setRawMaterialGate(false);
+    } else {
+      Serial.printf("[MQTT] Unknown raw material gate command: \"%s\"\n", command);
+    }
+    return;
+  }
+
   MaterialFeed *m = materialForTopic(topicStr);
   if (m == nullptr) return;
 
@@ -356,6 +402,9 @@ bool mqttConnect() {
   mqtt.publish("plant/esp1/status", "{\"value\":\"online\"}", true);
   Serial.println("[MQTT] Published: plant/esp1/status = online");
 
+  mqtt.subscribe(rawGateCmdTopic().c_str());
+  Serial.printf("[MQTT] Subscribed: %s\n", rawGateCmdTopic().c_str());
+
   for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
     mqtt.subscribe(topicTargetCmd(materials[i].item_id).c_str());
     Serial.printf("[MQTT] Subscribed: %s\n", topicTargetCmd(materials[i].item_id).c_str());
@@ -377,7 +426,7 @@ void maintainMqttConnection() {
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Serial.println("\n=== ESP32-1 Materials Node (5x Load Cell + Servo) - Booting ===");
+  Serial.println("\n=== ESP32-1 Materials Node (4x Load Cell + Raw Gate) - Booting ===");
 
   // ---- Step 1: WiFi first ----
   initWiFi();
@@ -387,7 +436,11 @@ void setup() {
   mqtt.setCallback(mqttCallback);
   mqttConnect();
 
-  // ---- Step 3: Initialize Servos and Load Cells ----
+  // ---- Step 3: Initialize Raw Gate Servo ----
+  rawMaterialGate.attach(25);
+  setRawMaterialGate(false);
+
+  // ---- Step 4: Initialize Material Servos and Load Cells ----
   // Each HX711 gets a bounded timeout so ONE dead/unwired channel can never
   // hang the other 4 or the rest of boot. Failed channels are retried later
   // from loop() via serviceTaring().

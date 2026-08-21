@@ -11,12 +11,12 @@
 // (Feature B in Architecture v5) and therefore accept a `/target/cmd` message.
 
 const ITEM_REGISTRY = [
-  // ---- ESP1: 5 load-cell + servo pairs (all dispensable) ----
+  // ---- ESP1: 4 load-cell + servo pairs (all dispensable) ----
   { id: "limestone",    type: "material", source: "esp1", unit: "g", dispensable: true },
   { id: "clay",         type: "material", source: "esp1", unit: "g", dispensable: true },
   { id: "iron_ore",     type: "material", source: "esp1", unit: "g", dispensable: true },
   { id: "sand",         type: "material", source: "esp1", unit: "g", dispensable: true },
-  { id: "raw_material", type: "material", source: "esp1", unit: "g", dispensable: true },
+  { id: "raw_material_gate", type: "actuator", source: "esp1", unit: "open/close", gate: true },
 
   // ---- ESP2: 16-channel relay board (2x8), 14 channels wired ----
   // Matches esp32/esp2-relay/esp2_relay.ino exactly. Channels 15-16 are spare.

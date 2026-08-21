@@ -22,7 +22,11 @@ truth: `backend/src/config/itemRegistry.js`.
 | `clay` | g |
 | `iron_ore` | g |
 | `sand` | g |
-| `raw_material` | g |
+### Gate actuator (ESP32-1 — servo)
+
+| item_id | unit | commands |
+|---|---|---|
+| `raw_material_gate` | open/close | `open`, `close` |
 
 ### Sensors (ESP32-2 — read-only, not relay-controlled)
 
@@ -83,14 +87,16 @@ WebSocket connects.
 ---
 
 ### `POST /api/item/:id/action`
-Send an ON/OFF command to an actuator. Used by the Dashboard, where a real
+Send an ON/OFF command to a relay actuator, or OPEN/CLOSE to the raw-material
+gate. Used by the Dashboard, where a real
 button exists to click.
 
 **Body**
 ```json
 { "command": "on" }
 ```
-`command` must be `"on"` or `"off"`.
+`command` must be `"on"` or `"off"` for relay actuators, or `"open"` or
+`"close"` for `raw_material_gate`.
 
 **Response 200**
 ```json
@@ -103,6 +109,8 @@ button exists to click.
 
 ### `GET /api/item/:id/action/on`
 ### `GET /api/item/:id/action/off`
+### `GET /api/item/raw_material_gate/action/open`
+### `GET /api/item/raw_material_gate/action/close`
 Fire an ON or OFF command immediately, no request body. Built for Cupola:
 
 - **Link-type hotspot**: paste this URL directly into the hotspot's embed
@@ -129,12 +137,12 @@ Used by the Dashboard's "Material Targets Configuration" panel.
 
 **Body**
 ```json
-{ "limestone": 50, "clay": 50, "iron_ore": 50, "sand": 50, "raw_material": 50 }
+{ "limestone": 50, "clay": 50, "iron_ore": 50, "sand": 50 }
 ```
 
 **Response 200**
 ```json
-{ "accepted": ["limestone", "clay", "iron_ore", "sand", "raw_material"], "rejected": [] }
+{ "accepted": ["limestone", "clay", "iron_ore", "sand"], "rejected": [] }
 ```
 An `item_id` lands in `rejected` if it's unknown, not dispensable, or its
 value isn't a number.
@@ -158,7 +166,7 @@ List of item_ids that accept a target.
 
 **Response 200**
 ```json
-["limestone", "clay", "iron_ore", "sand", "raw_material"]
+["limestone", "clay", "iron_ore", "sand"]
 ```
 
 ---
@@ -247,7 +255,8 @@ Materials / sensors (inline value):
   widget.html?id=clay
   widget.html?id=iron_ore
   widget.html?id=sand
-  widget.html?id=raw_material
+  control.html?id=raw_material_gate&action=open
+  control.html?id=raw_material_gate&action=close
   widget.html?id=clin_dht_temp
   widget.html?id=clin_dht_humidity
   widget.html?id=cooler_dht_temp

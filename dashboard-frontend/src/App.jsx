@@ -10,7 +10,6 @@ const SENSOR_TILES = [
   { id: "clay", label: "Clay", source: "esp1" },
   { id: "iron_ore", label: "Iron Ore", source: "esp1" },
   { id: "sand", label: "Sand", source: "esp1" },
-  { id: "raw_material", label: "Raw Material", source: "esp1" },
   { id: "klin_dht_temp", label: "Klin Area Temp", source: "esp2" },
   { id: "klin_dht_humidity", label: "Klin Area Humidity", source: "esp2" },
   { id: "cooler_dht_temp", label: "Cooler Area Temp", source: "esp2" },
@@ -21,6 +20,7 @@ const SENSOR_TILES = [
 ];
 
 const ACTUATORS = [
+  { id: "raw_material_gate", label: "Raw Material Gate", commands: ["open", "close"] },
   { id: "crusher", label: "Crusher (3x N20 ganged)" },
   { id: "conveyor_1", label: "Conveyor 1" },
   { id: "conveyor_2", label: "Conveyor 2" },
@@ -182,6 +182,7 @@ export default function App() {
               key={a.id}
               id={a.id}
               label={a.label}
+              commands={a.commands}
               isManualOverride={manualOverrides[a.id]}
               currentState={items[a.id]?.value}
             />

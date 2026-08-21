@@ -207,7 +207,7 @@ function publishTarget(item_id, target) {
 // Used by the Master Switch route to control all actuators at once
 function publishMasterCommand(command) {
   if (command !== "on" && command !== "off") return { count: 0, success: false };
-  const actuators = ITEM_REGISTRY.filter((item) => item.type === "actuator");
+  const actuators = ITEM_REGISTRY.filter((item) => item.type === "actuator" && !item.gate);
   let publishedCount = 0;
 
   actuators.forEach((item) => {

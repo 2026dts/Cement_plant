@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { API_BASE } from "../config.js";
 
-export default function ActuatorControl({ id, label, isManualOverride, currentState }) {
+export default function ActuatorControl({ id, label, isManualOverride, currentState, commands = ["on", "off"] }) {
   const [sending, setSending] = useState(false);
   const [notification, setNotification] = useState(null);
 
@@ -42,7 +42,7 @@ export default function ActuatorControl({ id, label, isManualOverride, currentSt
     }
   }
 
-  const isOn = currentState === "on";
+  const isActive = currentState === commands[0];
 
   return (
     <div className="bg-white rounded-xl shadow-md p-4 flex flex-col gap-2 relative">
@@ -50,9 +50,9 @@ export default function ActuatorControl({ id, label, isManualOverride, currentSt
         <div className="flex items-center gap-2">
           <span
             className={`w-2.5 h-2.5 rounded-full ${
-              isOn ? "bg-emerald-500 animate-pulse" : "bg-gray-300"
+            isActive ? "bg-emerald-500 animate-pulse" : "bg-gray-300"
             }`}
-            title={isOn ? "Active (ON)" : "Inactive (OFF)"}
+            title={isActive ? `Active (${commands[0].toUpperCase()})` : `Inactive (${commands[1].toUpperCase()})`}
           />
           <span className="font-medium text-sm">{label}</span>
         </div>
@@ -65,17 +65,17 @@ export default function ActuatorControl({ id, label, isManualOverride, currentSt
           )}
           <button
             disabled={sending}
-            onClick={() => send("on")}
+            onClick={() => send(commands[0])}
             className="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
           >
-            ON
+            {commands[0].toUpperCase()}
           </button>
           <button
             disabled={sending}
-            onClick={() => send("off")}
+            onClick={() => send(commands[1])}
             className="bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
           >
-            OFF
+            {commands[1].toUpperCase()}
           </button>
         </div>
       </div>
