@@ -61,6 +61,12 @@ function connect(onUpdate) {
     client.subscribe("plant/esp2/status");
     client.subscribe("plant/esp2/klin/manual_override");
     client.subscribe("plant/esp2/klin_heater/manual_override");
+    // Subscribe to OTA version and status topics
+    client.subscribe("plant/esp1/version");
+    client.subscribe("plant/esp2/version");
+    client.subscribe("plant/esp1/ota/status");
+    client.subscribe("plant/esp2/ota/status");
+    client.subscribe("v1/devices/me/telemetry");
   });
 
   client.on("reconnect", () => console.log("[MQTT] Reconnecting..."));
@@ -100,6 +106,35 @@ function connect(onUpdate) {
     if (topic === "plant/esp2/klin_heater/manual_override") {
       const updated = store.setValue("klin_heater_manual_override", payload.value, "");
       if (onUpdateCallback) onUpdateCallback("klin_heater_manual_override", updated);
+      return;
+    }
+
+    // Handle ESP1 & ESP2 version topics
+    if (topic === "plant/esp1/version" || topic === "plant/esp2/version") {
+      const dev = topic.includes("esp1") ? "esp1" : "esp2";
+      const otaData = store.setOtaStatus(dev, { version: payload.version, title: payload.title });
+      if (onUpdateCallback) onUpdateCallback("ota_status", { device: dev, ...otaData });
+      return;
+    }
+
+    // Handle ESP1 & ESP2 OTA status topics
+    if (topic === "plant/esp1/ota/status" || topic === "plant/esp2/ota/status") {
+      const dev = topic.includes("esp1") ? "esp1" : "esp2";
+      const otaData = store.setOtaStatus(dev, payload);
+      if (onUpdateCallback) onUpdateCallback("ota_status", { device: dev, ...otaData });
+      return;
+    }
+
+    // Handle ThingsBoard telemetry topic
+    if (topic === "v1/devices/me/telemetry") {
+      if (payload.current_fw_title && payload.current_fw_version) {
+        const dev = payload.current_fw_title.includes("esp1") ? "esp1" : "esp2";
+        const otaData = store.setOtaStatus(dev, {
+          version: payload.current_fw_version,
+          status: payload.fw_state ? payload.fw_state.toLowerCase() : "idle"
+        });
+        if (onUpdateCallback) onUpdateCallback("ota_status", { device: dev, ...otaData });
+      }
       return;
     }
 
@@ -320,4 +355,83 @@ function publishMasterCommand(command) {
   return { count: publishedCount, total: actuators.length, success: publishedCount > 0 };
 }
 
-module.exports = { connect, isConnected, publishCommand, publishMasterCommand, publishResumeAuto, publishTarget };
+function publishOtaCommand(target, firmwareTitle, firmwareVersion) {
+  if (!client || !client.connected) {
+    console.warn("[MQTT] publishOtaCommand: MQTT client not connected!");
+    return false;
+  }
+  const host = env.THINGSBOARD_URL ? env.THINGSBOARD_URL.replace(/\/$/, "") : `http://${env.MQTT_HOST || "localhost"}:8080`;
+  try {
+    if (target === "esp1" || target === "all") {
+      const title = (target === "all") ? "esp1_materials" : (firmwareTitle || "esp1_materials");
+      const ver = firmwareVersion || "1.0.1";
+      const token = env.MQTT_USER || "esp1";
+      const fwUrl = `${host}/api/v1/${token}/firmware?title=${encodeURIComponent(title)}&version=${encodeURIComponent(ver)}`;
+      const payload = JSON.stringify({
+        fw_title: title,
+        fw_version: ver,
+        fw_url: fwUrl,
+        target_fw_title: title,
+        target_fw_version: ver
+      });
+      client.publish("v1/devices/me/attributes", payload);
+      store.setOtaStatus("esp1", { status: "INITIATED", progress: 0, message: "ThingsBoard OTA package assigned", title, targetVersion: ver });
+    }
+    if (target === "esp2" || target === "all") {
+      const title = (target === "all") ? "esp2_relay" : (firmwareTitle || "esp2_relay");
+      const ver = firmwareVersion || "1.0.1";
+      const token = env.MQTT_USER || "esp2";
+      const fwUrl = `${host}/api/v1/${token}/firmware?title=${encodeURIComponent(title)}&version=${encodeURIComponent(ver)}`;
+      const payload = JSON.stringify({
+        fw_title: title,
+        fw_version: ver,
+        fw_url: fwUrl,
+        target_fw_title: title,
+        target_fw_version: ver
+      });
+      client.publish("v1/devices/me/attributes", payload);
+      store.setOtaStatus("esp2", { status: "INITIATED", progress: 0, message: "ThingsBoard OTA package assigned", title, targetVersion: ver });
+    }
+    if (onUpdateCallback) {
+      onUpdateCallback("ota_status", { device: target, all: store.allOtaStatus() });
+    }
+    return true;
+  } catch (e) {
+    console.error("[MQTT] publishOtaCommand error:", e.message || e);
+    return false;
+  }
+}
+
+function publishRebootCommand(target) {
+  if (!client || !client.connected) {
+    console.warn("[MQTT] publishRebootCommand: Client not connected!");
+    return false;
+  }
+  const payload = JSON.stringify({ command: "reboot" });
+  try {
+    if (target === "esp1" || target === "all") {
+      client.publish("plant/esp1/cmd/reboot", payload);
+      client.publish("v1/devices/me/rpc/request/1", JSON.stringify({ method: "reboot", params: {} }));
+      store.setDeviceStatus("esp1", "rebooting");
+      store.setOtaStatus("esp1", { status: "rebooting", message: "Reboot triggered" });
+    }
+    if (target === "esp2" || target === "all") {
+      client.publish("plant/esp2/cmd/reboot", payload);
+      client.publish("v1/devices/me/rpc/request/2", JSON.stringify({ method: "reboot", params: {} }));
+      store.setDeviceStatus("esp2", "rebooting");
+      store.setOtaStatus("esp2", { status: "rebooting", message: "Reboot triggered" });
+    }
+    if (onUpdateCallback) {
+      onUpdateCallback("reboot_status", { target, status: "rebooting" });
+    }
+    return true;
+  } catch (e) {
+    console.error("[MQTT] publishRebootCommand error:", e.message || e);
+    return false;
+  }
+}
+
+module.exports = {
+  connect, isConnected, publishCommand, publishMasterCommand,
+  publishResumeAuto, publishTarget, publishOtaCommand, publishRebootCommand
+};

@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { useLiveData } from "./hooks/useLiveData.js";
 import Tile from "./components/Tile.jsx";
 import MaterialTargets from "./components/MaterialTargets.jsx";
 import ActuatorControl from "./components/ActuatorControl.jsx";
 import MasterSwitch from "./components/MasterSwitch.jsx";
 import KilnTemperatureMonitor from "./components/KilnTemperatureMonitor.jsx";
+import OtaManagement from "./components/OtaManagement.jsx";
 
 const SENSOR_TILES = [
   { id: "limestone", label: "Limestone", source: "esp1" },
@@ -50,7 +52,11 @@ export default function App() {
   const {
     items, connected, deviceStatus, manualOverrides,
     kilnTemperature, refresh, refreshing, resetKilnBaseline,
+    otaStatus,
   } = useLiveData();
+
+  const [showOtaSection, setShowOtaSection] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const esp1Info = deviceStatus?.esp1 || { status: "unknown", lastSeen: null };
   const esp1LastSeen = esp1Info.lastSeen || items.esp1_status?.ts;
@@ -133,8 +139,52 @@ export default function App() {
               </span>
             </div>
           </div>
+
+          {/* Top Right System Menu Button */}
+          <div className="relative">
+            <button
+              onClick={() => setMenuOpen(!menuOpen)}
+              className="flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 border border-gray-300 text-gray-800 px-3.5 py-1.5 rounded-xl transition-all font-semibold text-xs shadow-sm"
+            >
+              <span>⚙ Options Menu</span>
+              <span className="text-[10px] text-gray-500">{menuOpen ? "▲" : "▼"}</span>
+            </button>
+
+            {menuOpen && (
+              <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50">
+                <button
+                  onClick={() => {
+                    setShowOtaSection(!showOtaSection);
+                    setMenuOpen(false);
+                  }}
+                  className="w-full text-left px-4 py-2.5 text-xs font-semibold text-gray-800 hover:bg-blue-50 hover:text-blue-600 flex items-center justify-between transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    <span>⚡</span> Firmware OTA &amp; System Update
+                  </span>
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      showOtaSection ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-800"
+                    }`}
+                  >
+                    {showOtaSection ? "ACTIVE" : "SHOW"}
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Hidden OTA Firmware Upgrade & System Management Panel */}
+      {showOtaSection && (
+        <OtaManagement
+          otaStatus={otaStatus}
+          isEsp1Online={isEsp1Online}
+          isEsp2Online={isEsp2Online}
+          onClose={() => setShowOtaSection(false)}
+        />
+      )}
 
       {/* Sensor Tiles Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">

@@ -16,6 +16,7 @@ const itemsRoutes = require("./src/routes/items");
 const actionRoutes = require("./src/routes/action");
 const materialsRoutes = require("./src/routes/materials");
 const healthRoutes = require("./src/routes/health");
+const otaRoutes = require("./src/routes/ota");
 
 const app = express();
 app.use(cors());
@@ -25,6 +26,8 @@ app.use("/api", itemsRoutes);
 app.use("/api", actionRoutes);
 app.use("/api", materialsRoutes);
 app.use("/api", healthRoutes);
+app.use("/api/ota", otaRoutes);
+app.use("/api/system", otaRoutes);
 
 const server = http.createServer(app);
 wsServer.attach(server);

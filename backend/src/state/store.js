@@ -106,11 +106,34 @@ function isMasterOverrideActive() {
   return masterOverrideActive;
 }
 
+// ---- OTA Firmware & System Reboot State Storage -----------------------------
+const otaState = new Map(); // device -> { version, status, progress, message, ts }
+
+function setOtaStatus(device, data) {
+  const existing = otaState.get(device) || { version: "1.0.0", status: "idle", progress: 0, message: "Ready", ts: Date.now() };
+  const updated = { ...existing, ...data, ts: Date.now() };
+  otaState.set(device, updated);
+  return updated;
+}
+
+function getOtaStatus(device) {
+  return otaState.get(device) || { version: "1.0.0", status: "idle", progress: 0, message: "Ready", ts: null };
+}
+
+function allOtaStatus() {
+  return {
+    esp1: getOtaStatus("esp1"),
+    esp2: getOtaStatus("esp2"),
+  };
+}
+
 module.exports = {
   setValue, setDispenseStatus,
   setDeviceStatus, getDeviceStatus, allDevices,
   get, all,
   updateKilnTemperature, resetKilnBaseline, getKilnTemperature,
   setMasterOverrideActive, isMasterOverrideActive,
+  setOtaStatus, getOtaStatus, allOtaStatus,
 };
+
 

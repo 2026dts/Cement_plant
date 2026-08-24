@@ -91,9 +91,11 @@
   <div id="root"></div>
 
   <script>
-    // Point these at your backend - see API_DOCUMENTATION.md.
-    const API_BASE = "http://localhost:4000";
-    const WS_URL   = "ws://localhost:4000/ws";
+    // Use the computer serving this page, so remote laptops reach the same backend.
+    const backendProtocol = window.location.protocol === "https:" ? "https:" : "http:";
+    const websocketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const API_BASE = `${backendProtocol}//${window.location.hostname}:4000`;
+    const WS_URL   = `${websocketProtocol}//${window.location.hostname}:4000/ws`;
 
     const params = new URLSearchParams(window.location.search);
     const itemId = params.get("id");

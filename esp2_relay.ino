@@ -93,16 +93,23 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <DHT.h>
+#include <HTTPUpdate.h>
+#include <esp_ota_ops.h>
+#include <esp_system.h>
 
 // ============================================================================
 // ---------------------------- USER CONFIGURATION ---------------------------
 // ============================================================================
+constexpr char FIRMWARE_TITLE[]   = "esp2_relay";
+constexpr char FIRMWARE_VERSION[] = "1.0.0";
+
+
 constexpr char WIFI_SSID[]     = "ACT-ai_103812010408";
 constexpr char WIFI_PASSWORD[] = "33346558";
 
-constexpr char MQTT_BROKER_HOST[] = "192.168.0.2";    // local Mosquitto machine's LAN IP
+constexpr char MQTT_BROKER_HOST[] = "192.168.0.3";    // local Mosquitto machine's LAN IP
 constexpr uint16_t MQTT_BROKER_PORT = 1883U;
-constexpr char MQTT_USER[]     = "";
+constexpr char MQTT_USER[]     = "esp2";               // ThingsBoard Access Token for ESP2
 constexpr char MQTT_PASSWORD[] = "";
 constexpr char MQTT_CLIENT_ID[] = "esp2-relay";
 
@@ -279,10 +286,190 @@ void publishOverrideStatus(const char *relayId, bool isManual) {
 }
 
 // ============================================================================
+// -------------------------- OTA & REBOOT MANAGEMENT -------------------------
+// ============================================================================
+void publishFwVersion() {
+  StaticJsonDocument<128> doc;
+  doc["title"]   = FIRMWARE_TITLE;
+  doc["version"] = FIRMWARE_VERSION;
+  char payload[128];
+  serializeJson(doc, payload);
+  mqtt.publish("plant/esp2/version", payload, true);
+
+  StaticJsonDocument<192> tbDoc;
+  tbDoc["current_fw_title"]   = FIRMWARE_TITLE;
+  tbDoc["current_fw_version"] = FIRMWARE_VERSION;
+  tbDoc["fw_state"]           = "UPDATED";
+  char tbPayload[192];
+  serializeJson(tbDoc, tbPayload);
+  mqtt.publish("v1/devices/me/telemetry", tbPayload);
+}
+
+#include <Update.h>
+
+void publishOtaStatus(const char *tbState, int progress, const char *msg) {
+  StaticJsonDocument<256> doc;
+  doc["title"]    = FIRMWARE_TITLE;
+  doc["version"]  = FIRMWARE_VERSION;
+  doc["status"]   = tbState;
+  doc["progress"] = progress;
+  doc["message"]  = msg;
+  char payload[256];
+  serializeJson(doc, payload);
+  mqtt.publish("plant/esp2/ota/status", payload, true);
+
+  // Native ThingsBoard OTA Telemetry format
+  StaticJsonDocument<256> tbDoc;
+  tbDoc["current_fw_title"]   = FIRMWARE_TITLE;
+  tbDoc["current_fw_version"] = FIRMWARE_VERSION;
+  tbDoc["fw_state"]           = tbState;
+  tbDoc["fw_progress"]        = progress;
+  tbDoc["fw_message"]         = msg;
+  char tbPayload[256];
+  serializeJson(tbDoc, tbPayload);
+  mqtt.publish("v1/devices/me/telemetry", tbPayload);
+}
+
+void stopActuatorsSafely() {
+  // Section 8 Requirement: De-energize all 13 active relay outputs (heaters, motors, crushers, conveyors, fans)
+  for (uint8_t i = 0; i < NUM_RELAYS; i++) {
+    writeRelay(relays[i], false);
+    publishRelayState(relays[i]);
+  }
+  klinManualOverride = false;
+  heaterManualOverride = false;
+  Serial.println("[SAFETY] ESP2 safety shutdown confirmed: All 13 relay outputs are OFF (heaters, motors, fans, crushers).");
+}
+
+void performReboot() {
+  Serial.println("[SYSTEM] Remote reboot requested via ThingsBoard RPC! Shutting down relays...");
+  stopActuatorsSafely();
+  mqtt.publish("plant/esp2/status", "{\"value\":\"rebooting\"}", true);
+  mqtt.loop();
+  delay(500);
+  ESP.restart();
+}
+
+void performOTA(const char *url = "", const char *checksum = "", const char *newVersion = "") {
+  Serial.printf("[OTA] ThingsBoard OTA Triggered! URL: %s, Checksum: %s, Target Version: %s\n", url, checksum, newVersion);
+
+  // Section 8 Requirement: ESP2 Safety Sequence before OTA download
+  stopActuatorsSafely();
+  publishOtaStatus("INITIATED", 0, "All 13 relays OFF. Initiating firmware download...");
+  delay(300);
+
+  publishOtaStatus("DOWNLOADING", 5, "Downloading firmware from ThingsBoard...");
+
+  if (strlen(checksum) == 32) {
+    Serial.printf("[OTA] Setting MD5 Checksum: %s\n", checksum);
+    httpUpdate.setMD5sum(checksum);
+  }
+
+  httpUpdate.onStart([]() {
+    Serial.println("[OTA] Update flash process started...");
+  });
+
+  httpUpdate.onEnd([]() {
+    Serial.println("[OTA] Firmware binary download and flash completed!");
+  });
+
+  httpUpdate.onProgress([](int cur, int total) {
+    int pct = (total > 0) ? (cur * 100) / total : 0;
+    Serial.printf("[OTA] Progress: %d%%\n", pct);
+  });
+
+  String downloadUrl = String(url);
+  if (downloadUrl.length() == 0) {
+    String tokenStr = strlen(MQTT_USER) > 0 ? String(MQTT_USER) : "esp2";
+    downloadUrl = String("http://") + MQTT_BROKER_HOST + ":8080/api/v1/" + tokenStr + "/firmware?title=" + String(FIRMWARE_TITLE) + "&version=" + String(newVersion);
+  }
+
+  Serial.printf("[OTA] Downloading firmware binary from: %s\n", downloadUrl.c_str());
+  t_httpUpdate_return ret = httpUpdate.update(espClient, downloadUrl.c_str());
+
+  switch (ret) {
+    case HTTP_UPDATE_FAILED: {
+      String errStr = String(httpUpdate.getLastErrorString());
+      Serial.printf("[OTA] Failed! Error (%d): %s\n", httpUpdate.getLastError(), errStr.c_str());
+      publishOtaStatus("FAILED", 0, errStr.c_str());
+      break;
+    }
+    case HTTP_UPDATE_NO_UPDATES:
+      Serial.println("[OTA] HTTP_UPDATE_NO_UPDATES");
+      publishOtaStatus("FAILED", 0, "No firmware package found");
+      break;
+    case HTTP_UPDATE_OK:
+      Serial.println("[OTA] HTTP_UPDATE_OK - Verified! Rebooting device...");
+      publishOtaStatus("DOWNLOADED", 90, "Download completed. Verifying partition...");
+      delay(200);
+      publishOtaStatus("VERIFIED", 95, "Checksum verified. Flashing partition...");
+      delay(200);
+      publishOtaStatus("UPDATING", 99, "Partition written. Rebooting device...");
+      mqtt.loop();
+      delay(1000);
+      ESP.restart();
+      break;
+  }
+}
+
+// ============================================================================
 // -------------------------------- MQTT CALLBACK ------------------------------
 // ============================================================================
 void mqttCallback(char *topic, byte *payload, unsigned int length) {
   String topicStr(topic);
+
+  // ---- Reboot commands ----
+  if (topicStr == "plant/esp2/cmd/reboot" || topicStr == "plant/cmd/reboot/all") {
+    performReboot();
+    return;
+  }
+
+  // ---- OTA Update commands ----
+  if (topicStr == "plant/esp2/ota/cmd" || topicStr == "plant/ota/cmd/all") {
+    StaticJsonDocument<256> otaDoc;
+    DeserializationError err = deserializeJson(otaDoc, payload, length);
+    if (!err) {
+      const char *url      = otaDoc["url"] | "";
+      const char *checksum = otaDoc["checksum"] | "";
+      const char *ver      = otaDoc["version"] | "";
+      performOTA(url, checksum, ver);
+    }
+    return;
+  }
+
+  // ---- ThingsBoard RPC / Shared Attributes ----
+  if (topicStr.startsWith("v1/devices/me/rpc/request/")) {
+    StaticJsonDocument<256> rpcDoc;
+    DeserializationError err = deserializeJson(rpcDoc, payload, length);
+    if (!err) {
+      const char *method = rpcDoc["method"] | "";
+      if (strcmp(method, "reboot") == 0) {
+        performReboot();
+        return;
+      } else if (strcmp(method, "firmware_update") == 0) {
+        const char *url      = rpcDoc["params"]["url"] | rpcDoc["url"] | "";
+        const char *checksum = rpcDoc["params"]["checksum"] | rpcDoc["checksum"] | "";
+        const char *ver      = rpcDoc["params"]["version"] | rpcDoc["version"] | "";
+        performOTA(url, checksum, ver);
+        return;
+      }
+    }
+  }
+
+  if (topicStr == "v1/devices/me/attributes" || topicStr.startsWith("v1/devices/me/attributes/response/")) {
+    StaticJsonDocument<512> attrDoc;
+    DeserializationError err = deserializeJson(attrDoc, payload, length);
+    if (!err) {
+      const char *fwTitle    = attrDoc["fw_title"] | attrDoc["target_fw_title"] | "";
+      const char *fwVer      = attrDoc["fw_version"] | attrDoc["target_fw_version"] | "";
+      const char *fwChecksum = attrDoc["fw_checksum"] | attrDoc["target_fw_checksum"] | "";
+      const char *fwUrl      = attrDoc["fw_url"] | "";
+      if ((strcmp(fwTitle, FIRMWARE_TITLE) == 0 || strlen(fwTitle) == 0) && strlen(fwVer) > 0 && strcmp(fwVer, FIRMWARE_VERSION) != 0) {
+        performOTA(fwUrl, fwChecksum, fwVer);
+        return;
+      }
+    }
+  }
 
   // ---- Handle "Resume Auto" override clear commands ----
   if (topicStr == "plant/esp2/klin/override_cmd" ||
@@ -362,21 +549,28 @@ bool mqttConnect() {
 
   Serial.println("[MQTT] Connected to Mosquitto.");
 
-  // Announce online status immediately
+  // Announce online status & firmware version immediately
   mqtt.publish("plant/esp2/status", "{\"value\":\"online\"}", true);
+  publishOtaStatus("UPDATED", 100, "Firmware is running");
+  publishFwVersion();
   Serial.println("[MQTT] Published: plant/esp2/status = online");
 
-  // Subscribe to all relay command topics
+  // Subscribe to topics
+  mqtt.subscribe("plant/esp2/ota/cmd");
+  mqtt.subscribe("plant/ota/cmd/all");
+  mqtt.subscribe("plant/esp2/cmd/reboot");
+  mqtt.subscribe("plant/cmd/reboot/all");
+  mqtt.subscribe("v1/devices/me/attributes");
+  mqtt.subscribe("v1/devices/me/attributes/response/+");
+  mqtt.subscribe("v1/devices/me/rpc/request/+");
+
   for (uint8_t i = 0; i < NUM_RELAYS; i++) {
     mqtt.subscribe(topicCmd(relays[i].item_id).c_str());
-    Serial.printf("[MQTT] Subscribed: %s\n", topicCmd(relays[i].item_id).c_str());
     publishRelayState(relays[i]);
   }
 
-  // Subscribe to manual override resume topics
   mqtt.subscribe("plant/esp2/klin/override_cmd");
   mqtt.subscribe("plant/esp2/klin_heater/override_cmd");
-  Serial.println("[MQTT] Subscribed: override_cmd topics for klin & klin_heater");
 
   publishOverrideStatus("klin",        klinManualOverride);
   publishOverrideStatus("klin_heater", heaterManualOverride);
@@ -520,6 +714,9 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   Serial.println("\n=== ESP32-2 Relay + Sensor Node - Booting ===");
+
+  // ---- Validate current running app partition & cancel rollback ----
+  esp_ota_mark_app_valid_cancel_rollback();
 
   for (uint8_t i = 0; i < NUM_RELAYS; i++) {
     pinMode(relays[i].pin, OUTPUT);

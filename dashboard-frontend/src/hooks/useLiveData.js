@@ -23,6 +23,10 @@ export function useLiveData() {
     startingTs: null,
     heaterWasOn: false,
   });
+  const [otaStatus, setOtaStatus] = useState({
+    esp1: { version: "1.0.0", status: "idle", progress: 0, message: "Ready" },
+    esp2: { version: "1.0.0", status: "idle", progress: 0, message: "Ready" },
+  });
   const [refreshing, setRefreshing] = useState(false);
   const wsRef = useRef(null);
 
@@ -41,13 +45,20 @@ export function useLiveData() {
     }
   }, []);
 
-  // ---- Refresh button handler — calls GET /api/refresh ----
+  // ---- Refresh button handler — calls GET /api/refresh and GET /api/ota/status ----
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const res = await fetch(`${API_BASE}/api/refresh`);
-      const data = await res.json();
-      applySnapshot(data);
+      const [res1, res2] = await Promise.all([
+        fetch(`${API_BASE}/api/refresh`),
+        fetch(`${API_BASE}/api/ota/status`),
+      ]);
+      const data1 = await res1.json();
+      const data2 = await res2.json();
+      applySnapshot(data1);
+      if (data2.success && data2.devices) {
+        setOtaStatus(data2.devices);
+      }
     } catch (err) {
       console.error("Refresh failed:", err);
     } finally {
@@ -67,22 +78,49 @@ export function useLiveData() {
   }, []);
 
   useEffect(() => {
-    // Initial full snapshot
-    fetch(`${API_BASE}/api/refresh`)
-      .then((r) => r.json())
-      .then((data) => applySnapshot(data))
+    // Initial full snapshot & OTA status
+    Promise.all([
+      fetch(`${API_BASE}/api/refresh`).then((r) => r.json()),
+      fetch(`${API_BASE}/api/ota/status`).then((r) => r.json()).catch(() => ({})),
+    ])
+      .then(([data1, data2]) => {
+        applySnapshot(data1);
+        if (data2.success && data2.devices) setOtaStatus(data2.devices);
+      })
       .catch((err) => console.error("Initial snapshot failed:", err));
 
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
+    let reconnectTimer;
+    let stopped = false;
 
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-    ws.onerror = (err) => console.error("WebSocket error:", err);
+    const connectWebSocket = () => {
+      if (stopped) return;
 
-    ws.onmessage = (event) => {
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+
+      ws.onopen = () => setConnected(true);
+      ws.onclose = () => {
+        setConnected(false);
+        if (!stopped) reconnectTimer = window.setTimeout(connectWebSocket, 2000);
+      };
+      ws.onerror = () => ws.close();
+
+      ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
       if (msg.type !== "update") return;
+
+      // Handle OTA status update broadcasts
+      if (msg.item_id === "ota_status") {
+        if (msg.device && msg.device !== "all") {
+          setOtaStatus((prev) => ({
+            ...prev,
+            [msg.device]: { ...prev[msg.device], ...msg },
+          }));
+        } else if (msg.all) {
+          setOtaStatus(msg.all);
+        }
+        return;
+      }
 
       if (msg.deviceSource && msg.deviceStatus) {
         setDeviceStatus((prev) => ({
@@ -123,9 +161,16 @@ export function useLiveData() {
         ...prev,
         [msg.item_id]: { ...prev[msg.item_id], ...msg },
       }));
+      };
     };
 
-    return () => ws.close();
+    connectWebSocket();
+
+    return () => {
+      stopped = true;
+      window.clearTimeout(reconnectTimer);
+      wsRef.current?.close();
+    };
   }, [applySnapshot]);
 
   const manualOverrides = {
@@ -136,5 +181,6 @@ export function useLiveData() {
   return {
     items, connected, deviceStatus, manualOverrides,
     kilnTemperature, refresh, refreshing, resetKilnBaseline,
+    otaStatus, setOtaStatus,
   };
 }

@@ -1,0 +1,171 @@
+# API Verification Guide — Before Wiring into Cupola
+
+Goal: prove every layer works **in isolation**, in this order, before you ever
+paste a URL into a Cupola hotspot. If Cupola shows a blank widget or a dead
+button, this order tells you in 30 seconds which layer broke — instead of
+guessing between firmware, MQTT, backend, or Cupola itself.
+
+```
+ESP32 firmware  ->  MQTT broker  ->  Node backend  ->  REST/WS  ->  widget-frontend  ->  Cupola
+     (1)               (2)             (3)             (4)            (5)              (6)
+```
+
+Tools you'll want installed on your test machine: `curl` (built-in on
+most systems), the `mosquitto-clients` package (`mosquitto_sub` /
+`mosquitto_pub`), and either Postman/Insomnia or `websocat`/`wscat` for the
+WebSocket layer. All commands below assume the backend is on
+`localhost:4000` and Mosquitto on `192.168.0.2:1883` — swap in your actual
+LAN IPs.
+
+---
+
+## Layer 1 — MQTT: is the ESP32 actually publishing?
+
+Before touching the backend at all, watch the raw MQTT traffic.
+
+```bash
+# Everything from both boards
+mosquitto_sub -h 192.168.0.2 -t 'plant/#' -v
+
+# Just one item while you debug it
+mosquitto_sub -h 192.168.0.2 -t 'plant/esp2/klin_dht_temp' -v
+```
+
+**Pass criteria:**
+- `plant/esp1/status` and `plant/esp2/status` show `{"value":"online"}` retained.
+- Every material/sensor topic updates on its expected interval (150ms for
+  esp1 telemetry, 2s for esp2 DHT/vibration).
+- Firing a manual command round-trips:
+  ```bash
+  mosquitto_pub -h 192.168.0.2 -t 'plant/esp2/crusher/cmd' -m '{"command":"on"}'
+  ```
+  then confirm `plant/esp2/crusher` publishes back `{"value":"on"}`.
+
+If this layer is broken, no amount of backend/Cupola debugging will fix it —
+fix wiring/firmware/broker first.
+
+---
+
+## Layer 2 — Backend health & MQTT bridge
+
+```bash
+curl http://localhost:4000/api/health
+```
+Expect `"mqtt_connected": true`. If `false`, check the backend's `.env`
+`MQTT_HOST` matches Mosquitto's actual LAN IP and that nothing else is
+already bound to port 1883.
+
+---
+
+## Layer 3 — REST endpoints (test every one before Cupola touches them)
+
+Run this checklist top to bottom. Each has a pass/fail you can eyeball.
+
+| # | Command | Pass criteria |
+|---|---|---|
+| 1 | `curl http://localhost:4000/api/items` | JSON object, one key per registry item, no `undefined`/`null` values after boards have been up >5s |
+| 2 | `curl http://localhost:4000/api/item/iron_ore` | `{"item_id":"iron_ore","value":...,"unit":"g","ts":...}` |
+| 3 | `curl http://localhost:4000/api/item/does_not_exist` | HTTP 404 |
+| 4 | `curl http://localhost:4000/api/item/crusher/action/on` | `text/plain` body `CRUSHER: ON`, relay physically clicks, `plant/esp2/crusher` MQTT updates to `on` |
+| 5 | `curl http://localhost:4000/api/item/crusher/action/off` | Same, `OFF` |
+| 6 | `curl http://localhost:4000/api/item/iron_ore/action/on` | HTTP 400 — `iron_ore` isn't an actuator |
+| 7 | `curl -X POST http://localhost:4000/api/item/crusher/action -H "Content-Type: application/json" -d '{"command":"on"}'` | HTTP 200, same effect as #4 |
+| 8 | `curl -X POST http://localhost:4000/api/materials/targets -H "Content-Type: application/json" -d '{"limestone":50}'` | `{"accepted":["limestone"],"rejected":[]}`, servo moves, MQTT `target/status` goes `dispensing` then `done` |
+| 9 | `curl -X POST http://localhost:4000/api/materials/targets -H "Content-Type: application/json" -d '{"crusher":50}'` | `crusher` lands in `rejected` (not dispensable) |
+| 10 | `curl http://localhost:4000/api/materials/dispensable` | Array of the 5 material ids |
+
+For step 8/9, keep `mosquitto_sub -t 'plant/#' -v` running in a second
+terminal so you see the MQTT round-trip, not just the HTTP response — the
+HTTP call succeeding doesn't guarantee the ESP32 actually received it.
+
+**Use Postman/Insomnia instead of curl once you're past the sanity pass** —
+save every row above as a saved request in a collection named after this
+project. That collection becomes your regression check any time you touch
+`itemRegistry.js` or firmware topic names later.
+
+---
+
+## Layer 4 — WebSocket
+
+```bash
+# websocat (or wscat) - connect and watch unscoped updates
+websocat ws://localhost:4000/ws
+
+# Scoped to one item - paste this as the first message after connecting
+{"type":"subscribe","item_id":"iron_ore"}
+```
+
+**Pass criteria:**
+- Unscoped connection receives `{"type":"update", ...}` for *every* item as
+  values change.
+- Scoped connection receives updates **only** for `iron_ore` after you send
+  the subscribe message.
+- Toggling `crusher` on/off (Layer 3, step 4/5) shows up as a WS update with
+  `value: "on"` / `"off"` in real time, not just on next poll.
+
+If Layer 3 passes but this doesn't, the bug is in `wsServer.js`'s
+subscription/broadcast logic, not in MQTT or the ESP32s.
+
+---
+
+## Layer 5 — widget-frontend, standalone in a browser tab
+
+The README already says to do this — it's worth restating why it's a
+separate step from Cupola: Cupola's embed sandbox can silently swallow JS
+errors or block mixed-content/CORS requests in ways a normal tab won't. If
+it doesn't work standalone, it will *definitely* not work inside Cupola;
+if it works standalone but fails inside Cupola, you've isolated the problem
+to Cupola's embed behavior specifically (see Layer 6).
+
+```bash
+cd widget-frontend && npx serve .
+```
+
+Open directly, one at a time:
+- `http://localhost:PORT/widget.html?id=iron_ore` → shows `iron_ore: 52 g`,
+  updates live without a page refresh.
+- `http://localhost:PORT/control.html?id=crusher` → both buttons render,
+  the one matching current state is highlighted, tapping ON/OFF changes
+  the relay **and** the highlight updates over WS within ~1s.
+- `http://localhost:PORT/control.html?id=crusher&action=on` → fires
+  immediately on load, shows `CRUSHER: ON`, no buttons.
+
+Check the browser console (F12) on every one of these — a silent JS error
+here is the #1 cause of "worked with curl, blank in Cupola."
+
+If `widget.html`/`control.html` aren't pointed at `localhost:4000`, edit the
+`API_BASE`/`WS_URL` constants near the top of each file first — this is a
+common miss when the backend later moves off localhost.
+
+---
+
+## Layer 6 — Cupola itself
+
+Only now paste URLs into hotspot embed fields, one hotspot at a time, and
+re-verify the same pass criteria as Layer 5 inside Cupola's actual embed
+view. If something that worked in a plain browser tab breaks only inside
+Cupola:
+- Confirm Cupola's device and your backend are on the same LAN/subnet (no
+  VPN or guest-WiFi isolation between them).
+- Confirm the URL uses the backend machine's LAN IP, not `localhost` —
+  `localhost` inside Cupola's embed resolves to Cupola's own device, not
+  yours.
+- Check whether Cupola's embed strips query strings or enforces `https://`
+  — if so you may need Style B (link-type hotspot) instead of Style A, or a
+  reverse proxy with TLS in front of the backend.
+
+---
+
+## Before you wire in actuators/sensors for real
+
+1. Walk Layers 1-4 for **every** item_id in the registry, not just one —
+   copy the Layer 3 table into your test collection with one row per
+   item_id.
+2. Confirm the **security note** in `API_DOCUMENTATION.md` — the
+   GET-triggered `/action/on|off` routes have no auth. Fine for the current
+   private LAN, but decide now whether the cupola/command-center rollout
+   stays LAN-only or needs auth in front of it later.
+3. Re-run the full checklist once more **after** you add OTA (see the
+   firmware files) — OTA forces relays off / servos home on update start,
+   so any automation depending on "last known state persisting across a
+   firmware push" needs to explicitly re-sync after a reboot, not assume it.
