@@ -28,10 +28,19 @@
       white-space: nowrap;
       padding: 2px 6px;
     }
+    #alarm {
+      min-height: 20px;
+      color: #ff3b30;
+      font-size: 16px;
+      font-weight: 700;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+      padding: 0 6px 2px;
+    }
   </style>
 </head>
 <body>
-  <span id="label">--</span>
+  <div id="label">--</div>
+  <div id="alarm" role="status" aria-live="polite"></div>
 
   <script src="js/ws-client.js"></script>
   <script>
@@ -42,6 +51,7 @@
     const params = new URLSearchParams(window.location.search);
     const itemId = params.get("id");
     const labelEl = document.getElementById("label");
+    const alarmEl = document.getElementById("alarm");
 
     function render(itemId, value, unit) {
       let shown = value === null || value === undefined ? "--" : value;
@@ -49,6 +59,17 @@
         shown = 0;
       }
       labelEl.textContent = `${itemId}: ${shown}${unit ? " " + unit : ""}`;
+
+      const weight = Number(value);
+      if (value === null || value === undefined || value === "" || !Number.isFinite(weight)) {
+        alarmEl.textContent = "";
+      } else if (weight > 20) {
+        alarmEl.textContent = "OVERLOAD ALARM";
+      } else if (weight < 5) {
+        alarmEl.textContent = "UNDER WEIGHT ALARM";
+      } else {
+        alarmEl.textContent = "";
+      }
     }
 
     if (!itemId) {
