@@ -232,9 +232,34 @@ async function sendRpcReboot(deviceId) {
   return false;
 }
 
+// ---- Forward device telemetry to ThingsBoard ----
+async function sendTelemetry(deviceToken, telemetry) {
+  if (!env.THINGSBOARD_URL) return false;
+  try {
+    const host = env.THINGSBOARD_URL.replace(/\/$/, "");
+    const url = `${host}/api/v1/${deviceToken}/telemetry`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(telemetry),
+    });
+
+    if (res.ok) {
+      console.log(`[ThingsBoard API] Forwarded telemetry to device token: ${deviceToken}`);
+      return true;
+    } else {
+      console.warn(`[ThingsBoard API] Failed to forward telemetry (${res.status}): ${res.statusText}`);
+    }
+  } catch (err) {
+    console.warn(`[ThingsBoard API] Error forwarding telemetry for ${deviceToken}:`, err.message);
+  }
+  return false;
+}
+
 module.exports = {
   authenticate,
   getOtaPackages,
   assignOtaPackage,
   sendRpcReboot,
+  sendTelemetry,
 };

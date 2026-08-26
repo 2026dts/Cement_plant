@@ -129,6 +129,11 @@ function connect(onUpdate) {
     if (topic === "v1/devices/me/telemetry") {
       if (payload.current_fw_title && payload.current_fw_version) {
         const dev = payload.current_fw_title.includes("esp1") ? "esp1" : "esp2";
+        
+        // Forward the telemetry to ThingsBoard HTTP API using device token (esp1 or esp2)
+        const thingsboardService = require("../services/thingsboardService");
+        thingsboardService.sendTelemetry(dev, payload);
+
         const otaData = store.setOtaStatus(dev, {
           version: payload.current_fw_version,
           status: payload.fw_state ? payload.fw_state.toLowerCase() : "idle"
@@ -187,13 +192,28 @@ function connect(onUpdate) {
 }
 
 function evaluateKilnTempThreshold() {
+  if (store.isMasterOverrideActive()) {
+    console.log("[AUTO] Temperature threshold control paused: Master Switch override is active.");
+    return;
+  }
+
   const rawTemp = store.get("klin_dht_temp")?.value;
   if (rawTemp === null || rawTemp === undefined || isNaN(rawTemp)) return;
 
   const isBelowSetpoint = Number(rawTemp) < 35;
-  setAutomaticState("klin_heater", isBelowSetpoint ? "on" : "off");
-  setAutomaticState("heat_blower", isBelowSetpoint ? "on" : "off");
-  setAutomaticState("klin", isBelowSetpoint ? "off" : "on");
+  
+  // Only control heater & blower if manual override for heater is not active
+  const heaterOverride = store.get("klin_heater_manual_override")?.value === true;
+  if (!heaterOverride) {
+    setAutomaticState("klin_heater", isBelowSetpoint ? "on" : "off");
+    setAutomaticState("heat_blower", isBelowSetpoint ? "on" : "off");
+  }
+
+  // Only control kiln motor if manual override for kiln is not active
+  const klinOverride = store.get("klin_manual_override")?.value === true;
+  if (!klinOverride) {
+    setAutomaticState("klin", isBelowSetpoint ? "off" : "on");
+  }
 }
 
 function setAutomaticState(item_id, command) {
