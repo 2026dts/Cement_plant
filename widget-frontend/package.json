@@ -1,0 +1,12 @@
+{
+  "name": "cement-plant-widget-server",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^4.19.2"
+  }
+}

@@ -44,14 +44,19 @@
 
   <script src="js/ws-client.js"></script>
   <script>
-    // Point these at your backend (Architecture v5, Section 4).
-    const API_BASE = "http://localhost:4000";
-    const WS_URL   = "ws://localhost:4000/ws";
+    // Use the host serving this widget, so another device does not resolve
+    // localhost to itself instead of the laptop running the backend.
+    const backendProtocol = window.location.protocol === "https:" ? "https:" : "http:";
+    const websocketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const API_BASE = `${backendProtocol}//${window.location.hostname}:4000`;
+    const WS_URL   = `${websocketProtocol}//${window.location.hostname}:4000/ws`;
 
     const params = new URLSearchParams(window.location.search);
     const itemId = params.get("id");
     const labelEl = document.getElementById("label");
     const alarmEl = document.getElementById("alarm");
+
+    const HOPPER_MATERIALS = ["gypsum", "clay", "iron_ore", "sand", "limestone", "lime_stone"];
 
     function render(itemId, value, unit) {
       let shown = value === null || value === undefined ? "--" : value;
@@ -61,12 +66,18 @@
       labelEl.textContent = `${itemId}: ${shown}${unit ? " " + unit : ""}`;
 
       const weight = Number(value);
-      if (value === null || value === undefined || value === "" || !Number.isFinite(weight)) {
-        alarmEl.textContent = "";
-      } else if (weight > 20) {
-        alarmEl.textContent = "OVERLOAD ALARM";
-      } else if (weight < 5) {
-        alarmEl.textContent = "UNDER WEIGHT ALARM";
+      const isHopper = HOPPER_MATERIALS.includes(itemId);
+
+      if (isHopper && value !== null && value !== undefined && value !== "" && Number.isFinite(weight)) {
+        if (weight > 20) {
+          alarmEl.textContent = "OVERLOAD ALARM";
+          alarmEl.style.color = "#ff3b30";
+        } else if (weight < 5) {
+          alarmEl.textContent = "UNDER WEIGHT ALARM";
+          alarmEl.style.color = "#ff3b30";
+        } else {
+          alarmEl.textContent = "";
+        }
       } else {
         alarmEl.textContent = "";
       }

@@ -26,19 +26,19 @@
   ================================ WIRING ====================================
   Shared SCK (all 4 load cells): GPIO 32
 
-    Pair 1 - limestone:     DOUT -> GPIO22  | Servo -> GPIO27
+    Pair 1 - gypsum:        DOUT -> GPIO22  | Servo -> GPIO27
     Pair 2 - clay:          DOUT -> GPIO23  | Servo -> GPIO26
     Pair 3 - iron_ore:      DOUT -> GPIO5   | Servo -> GPIO14
     Pair 4 - sand:          DOUT -> GPIO15  | Servo -> GPIO13
-    Raw material gate:                         Servo -> GPIO25
+    Lime stone gate:                           Servo -> GPIO25
 
-  MQTT topics (per material, e.g. "limestone"):
-    plant/esp1/limestone                 -> published live weight  { "value": 23.4, "unit": "g" }
-    plant/esp1/limestone/target/cmd      -> subscribed target      { "target": 50 }
-    plant/esp1/limestone/target/status   -> published status       { "status": "dispensing" | "done" }
+  MQTT topics (per material, e.g. "gypsum"):
+    plant/esp1/gypsum                    -> published live weight  { "value": 23.4, "unit": "g" }
+    plant/esp1/gypsum/target/cmd         -> subscribed target      { "target": 50 }
+    plant/esp1/gypsum/target/status      -> published status       { "status": "dispensing" | "done" }
     plant/esp1/status                    -> published device status { "value": "online" | "offline" }
-    plant/esp1/raw_material_gate          -> published gate state { "value": "open" | "close" }
-    plant/esp1/raw_material_gate/cmd      -> subscribed gate command { "command": "open" | "close" }
+    plant/esp1/lime_stone                 -> published gate state { "value": "open" | "close" }
+    plant/esp1/lime_stone/cmd             -> subscribed gate command { "command": "open" | "close" }
 
   ============================= BOOT / TARE BEHAVIOUR =========================
   At boot, each channel's HX711 is brought up with a bounded timeout instead
@@ -121,15 +121,15 @@ struct MaterialFeed {
 };
 
 MaterialFeed materials[4] = {
-  { "limestone",    22, 27 },
+  { "gypsum",       22, 27 },
   { "clay",         23, 26 },
   { "iron_ore",      5, 14 },
   { "sand",          15, 13 },
 };
 constexpr uint8_t NUM_MATERIALS = 4;
 
-Servo rawMaterialGate;
-bool rawMaterialGateOpen = false;
+Servo limeStoneGate;
+bool limeStoneGateOpen = false;
 
 // ============================================================================
 // ------------------------------- MQTT CLIENT --------------------------------
@@ -143,8 +143,8 @@ unsigned long lastReconnectAttemptMs = 0;
 String topicValue(const char *item_id)        { return String("plant/esp1/") + item_id; }
 String topicTargetCmd(const char *item_id)    { return String("plant/esp1/") + item_id + "/target/cmd"; }
 String topicTargetStatus(const char *item_id) { return String("plant/esp1/") + item_id + "/target/status"; }
-String rawGateStateTopic()                    { return "plant/esp1/raw_material_gate"; }
-String rawGateCmdTopic()                      { return "plant/esp1/raw_material_gate/cmd"; }
+String limeStoneGateStateTopic()              { return "plant/esp1/lime_stone"; }
+String limeStoneGateCmdTopic()                { return "plant/esp1/lime_stone/cmd"; }
 
 // ============================================================================
 // --------------------------------- WIFI -------------------------------------
@@ -222,22 +222,22 @@ void publishValue(const char *item_id, float value, const char *unit) {
   mqtt.publish(topicValue(item_id).c_str(), payload);
 }
 
-void publishRawMaterialGateState() {
+void publishLimeStoneGateState() {
   StaticJsonDocument<48> doc;
-  doc["value"] = rawMaterialGateOpen ? "open" : "close";
+  doc["value"] = limeStoneGateOpen ? "open" : "close";
   doc["unit"] = "open/close";
   char payload[48];
   serializeJson(doc, payload);
-  mqtt.publish(rawGateStateTopic().c_str(), payload, true);
+  mqtt.publish(limeStoneGateStateTopic().c_str(), payload, true);
 }
 
-void setRawMaterialGate(bool open) {
-  rawMaterialGateOpen = open;
-  rawMaterialGate.write(open ? SERVO_MAX_ANGLE : SERVO_HOME_ANGLE);
-  Serial.printf("[RAW MATERIAL GATE] %s -> %d degrees\n",
+void setLimeStoneGate(bool open) {
+  limeStoneGateOpen = open;
+  limeStoneGate.write(open ? SERVO_MAX_ANGLE : SERVO_HOME_ANGLE);
+  Serial.printf("[LIME STONE GATE] %s -> %d degrees\n",
                 open ? "open" : "close",
                 open ? SERVO_MAX_ANGLE : SERVO_HOME_ANGLE);
-  publishRawMaterialGateState();
+  publishLimeStoneGateState();
 }
 
 // ============================================================================
@@ -376,7 +376,7 @@ void publishOtaStatus(const char *tbState, int progress, const char *msg) {
 }
 
 void stopActuatorsSafely() {
-  setRawMaterialGate(false);
+  setLimeStoneGate(false);
   for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
     materials[i].dispensing = false;
     materials[i].servo.write(SERVO_HOME_ANGLE);
@@ -523,7 +523,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
     }
   }
 
-  if (topicStr == rawGateCmdTopic()) {
+  if (topicStr == limeStoneGateCmdTopic()) {
     StaticJsonDocument<64> gateDoc;
     DeserializationError gateErr = deserializeJson(gateDoc, payload, length);
     if (gateErr) {
@@ -533,11 +533,11 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
 
     const char *command = gateDoc["command"] | "";
     if (strcmp(command, "open") == 0) {
-      setRawMaterialGate(true);
+      setLimeStoneGate(true);
     } else if (strcmp(command, "close") == 0) {
-      setRawMaterialGate(false);
+      setLimeStoneGate(false);
     } else {
-      Serial.printf("[MQTT] Unknown raw material gate command: \"%s\"\n", command);
+      Serial.printf("[MQTT] Unknown lime stone gate command: \"%s\"\n", command);
     }
     return;
   }
@@ -590,7 +590,7 @@ bool mqttConnect() {
   publishFwVersion();
   Serial.println("[MQTT] Published: plant/esp1/status = online");
 
-  mqtt.subscribe(rawGateCmdTopic().c_str());
+  mqtt.subscribe(limeStoneGateCmdTopic().c_str());
   mqtt.subscribe("plant/esp1/ota/cmd");
   mqtt.subscribe("plant/ota/cmd/all");
   mqtt.subscribe("plant/esp1/cmd/reboot");
@@ -633,8 +633,8 @@ void setup() {
   mqttConnect();
 
   // ---- Step 3: Initialize Raw Gate Servo ----
-  rawMaterialGate.attach(25);
-  setRawMaterialGate(false);
+  limeStoneGate.attach(25);
+  setLimeStoneGate(false);
 
   // ---- Step 4: Initialize Material Servos and Load Cells ----
   // Each HX711 gets a bounded timeout so ONE dead/unwired channel can never

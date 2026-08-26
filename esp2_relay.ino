@@ -120,22 +120,10 @@ constexpr uint32_t DHT_READ_MS             = 2000UL;  // DHT + vibration publish
 constexpr bool RELAY_ACTIVE_LOW = true;  // Active-LOW relay module: LOW = coil energized (NO closes / ON), HIGH = coil de-energized (NO opens / OFF)
 
 // ============================================================================
-// ---------------------- PID TEMPERATURE CONTROL CONFIG ----------------------
+// ---------------- TEMPERATURE CONTROL (BACKEND THRESHOLD) -------------------
 // ============================================================================
-// These are the only values you need to change to tune the PID behaviour.
-// The PID controls klin_heater ON/OFF duty within a 10-second window:
-//   ON time (ms) = (pid_output / 255) * PID_PERIOD_MS
-//   When heater is OFF during the window, the klin motor runs instead.
-//
-// Kd is intentionally small: DHT11 gives integer-step readings (e.g. 34->35°C),
-// which produce sharp derivative spikes. A high Kd would cause the heater to
-// overreact to a single 1°C jump.
-//
-constexpr float    PID_SETPOINT   = 35.0f;   // Target klin area temperature (°C)
-constexpr float    PID_KP         = 2.0f;    // Proportional gain
-constexpr float    PID_KI         = 0.1f;    // Integral gain
-constexpr float    PID_KD         = 0.05f;   // Derivative gain (low — DHT11 integer steps)
-constexpr uint32_t PID_PERIOD_MS  = 10000UL; // Duty-cycle window length (10 seconds)
+// Temperature decisions are made by the backend. ESP32 only reads sensors and
+// executes relay commands, so there is one controller for the whole system.
 
 // ============================================================================
 // ------------------------------ RELAY CHANNELS -------------------------------
@@ -206,15 +194,6 @@ String topicState(const char *item_id) { return String("plant/esp2/") + item_id;
 String topicCmd(const char *item_id)   { return String("plant/esp2/") + item_id + "/cmd"; }
 
 // ============================================================================
-// ----------------------------- PID STATE ------------------------------------
-// ============================================================================
-float    pidIntegral       = 0.0f;
-float    pidPrevError      = 0.0f;
-float    latestKlinTemp    = NAN;    // most recent valid klin DHT reading
-uint8_t  pidOutput         = 128;   // 0-255; start at midpoint (50% duty)
-uint32_t pidOnDurationMs   = PID_PERIOD_MS / 2;
-unsigned long pidWindowStartMs = 0; // millis() when current 10s window began
-
 // ============================================================================
 // ------------------------- MANUAL OVERRIDE STATE ----------------------------
 // ============================================================================
@@ -504,6 +483,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
   }
 
   const char *command = doc["command"] | "";
+  const char *mode = doc["mode"] | "manual";
   if (strcmp(command, "on") == 0) {
     writeRelay(*r, true);
   } else if (strcmp(command, "off") == 0) {
@@ -513,7 +493,9 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
     return;
   }
 
-  if (strcmp(r->item_id, "klin") == 0) {
+  if (strcmp(mode, "auto") == 0) {
+    Serial.printf("[AUTO] %s -> %s\n", r->item_id, r->isOn ? "ON" : "OFF");
+  } else if (strcmp(r->item_id, "klin") == 0) {
     klinManualOverride = true;
     publishOverrideStatus("klin", true);
     Serial.println("[OVERRIDE] klin -> manual override ACTIVE (PID paused)");
@@ -602,7 +584,6 @@ void readAndPublishSensors() {
   float ct = klinDht.readTemperature();
   float ch = klinDht.readHumidity();
   if (!isnan(ct) && !isnan(ch)) {
-    latestKlinTemp = ct;  // keep for PID
     publishValue("klin_dht_temp", ct, "C");
     publishValue("klin_dht_humidity", ch, "%");
   } else {
@@ -646,67 +627,8 @@ void readAndPublishSensors() {
 }
 
 // ============================================================================
-// --------------------------- PID CONTROL LOGIC ------------------------------
+// ---------------------- TEMPERATURE CONTROL REMOVED ------------------------
 // ============================================================================
-void computePidWindow() {
-  if (isnan(latestKlinTemp)) {
-    Serial.println("[PID] No valid klin temp yet, skipping window");
-    return;
-  }
-
-  float error      = PID_SETPOINT - latestKlinTemp;
-  pidIntegral     += error;
-
-  const float integralMax = 255.0f / PID_KI;
-  if (pidIntegral >  integralMax) pidIntegral =  integralMax;
-  if (pidIntegral < -integralMax) pidIntegral = -integralMax;
-
-  float derivative = error - pidPrevError;
-  pidPrevError     = error;
-
-  float rawOutput  = PID_KP * error + PID_KI * pidIntegral + PID_KD * derivative;
-
-  if (rawOutput > 255.0f) rawOutput = 255.0f;
-  if (rawOutput <   0.0f) rawOutput =   0.0f;
-  pidOutput = (uint8_t)rawOutput;
-
-  pidOnDurationMs = (uint32_t)((pidOutput / 255.0f) * (float)PID_PERIOD_MS);
-
-  Serial.printf("[PID] temp=%.1fC setpoint=%.1fC err=%.1f integ=%.2f deriv=%.2f out=%u onTime=%ums\n",
-                latestKlinTemp, PID_SETPOINT, error, pidIntegral, derivative, pidOutput, pidOnDurationMs);
-}
-
-void applyPidControl() {
-  if (klinManualOverride && heaterManualOverride) return;
-
-  unsigned long now     = millis();
-  unsigned long elapsed = now - pidWindowStartMs;
-
-  bool heaterShouldBeOn = (elapsed < pidOnDurationMs);
-  bool klinShouldBeOn   = !heaterShouldBeOn;
-
-  RelayChannel *heaterRelay = findRelay("klin_heater");
-  RelayChannel *klinRelay   = findRelay("klin");
-
-  if (!heaterManualOverride && heaterRelay) {
-    if (heaterRelay->isOn != heaterShouldBeOn) {
-      writeRelay(*heaterRelay, heaterShouldBeOn);
-      publishRelayState(*heaterRelay);
-      Serial.printf("[PID-RELAY] klin_heater -> %s (elapsed=%lums onTime=%ums)\n",
-                    heaterShouldBeOn ? "ON" : "OFF", elapsed, pidOnDurationMs);
-    }
-  }
-
-  if (!klinManualOverride && klinRelay) {
-    if (klinRelay->isOn != klinShouldBeOn) {
-      writeRelay(*klinRelay, klinShouldBeOn);
-      publishRelayState(*klinRelay);
-      Serial.printf("[PID-RELAY] klin -> %s (elapsed=%lums onTime=%ums)\n",
-                    klinShouldBeOn ? "ON" : "OFF", elapsed, pidOnDurationMs);
-    }
-  }
-}
-
 // ============================================================================
 // ---------------------------------- SETUP -----------------------------------
 // ============================================================================
@@ -731,8 +653,6 @@ void setup() {
   initWiFi();
   mqtt.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
   mqtt.setCallback(mqttCallback);
-
-  pidWindowStartMs = millis();
 
   Serial.println("=== Setup complete ===\n");
 }
@@ -765,12 +685,4 @@ void loop() {
     readAndPublishSensors();
   }
 
-  if (now - pidWindowStartMs >= PID_PERIOD_MS) {
-    pidWindowStartMs = now;
-    computePidWindow();
-  }
-
-  if (mqtt.connected()) {
-    applyPidControl();
-  }
 }

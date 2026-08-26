@@ -8,7 +8,7 @@ import KilnTemperatureMonitor from "./components/KilnTemperatureMonitor.jsx";
 import OtaManagement from "./components/OtaManagement.jsx";
 
 const SENSOR_TILES = [
-  { id: "limestone", label: "Limestone", source: "esp1" },
+  { id: "gypsum", label: "Gypsum", source: "esp1" },
   { id: "clay", label: "Clay", source: "esp1" },
   { id: "iron_ore", label: "Iron Ore", source: "esp1" },
   { id: "sand", label: "Sand", source: "esp1" },
@@ -22,7 +22,7 @@ const SENSOR_TILES = [
 ];
 
 const ACTUATORS = [
-  { id: "raw_material_gate", label: "Raw Material Gate", commands: ["open", "close"] },
+  { id: "lime_stone", label: "Lime Stone", commands: ["open", "close"] },
   { id: "crusher", label: "Crusher (3x N20 ganged)" },
   { id: "conveyor_1", label: "Conveyor 1" },
   { id: "conveyor_2", label: "Conveyor 2" },

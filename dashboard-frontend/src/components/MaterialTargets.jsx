@@ -6,7 +6,7 @@ import { API_BASE } from "../config.js";
 // starts dispensing on its own click and stops automatically once its load
 // cell reports the target weight (Architecture v5, Section 4).
 const MATERIALS = [
-  { id: "limestone", label: "Limestone" },
+  { id: "gypsum", label: "Gypsum" },
   { id: "clay", label: "Clay" },
   { id: "iron_ore", label: "Iron Ore" },
   { id: "sand", label: "Sand" },

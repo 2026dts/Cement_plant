@@ -80,7 +80,7 @@ Developer (in India) compiles binary `.bin` in Arduino IDE (`Sketch → Export C
 3. **ESP32 Notification & Safe Hardware Shutdown**:
    - **ESP1**:
      - Receives `v1/devices/me/attributes` notification.
-     - **Safety Sequence**: Immediately stops material dispensing, homes all 4 servos (`SERVO_HOME_ANGLE` = 30°), and closes the raw material gate (`GPIO25` = LOW).
+   - **Safety Sequence**: Immediately stops material dispensing, homes all 4 servos (`SERVO_HOME_ANGLE` = 30°), and closes the lime stone gate (`GPIO25` = LOW).
    - **ESP2**:
      - Receives `v1/devices/me/attributes` notification.
      - **Safety Sequence**: Immediately de-energizes all 13 active relay outputs (turning OFF heaters, kiln motors, crushers, conveyors, and fans).

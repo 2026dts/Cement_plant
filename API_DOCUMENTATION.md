@@ -18,7 +18,7 @@ truth: `backend/src/config/itemRegistry.js`.
 
 | item_id | unit |
 |---|---|
-| `limestone` | g |
+| `gypsum` | g |
 | `clay` | g |
 | `iron_ore` | g |
 | `sand` | g |
@@ -26,7 +26,7 @@ truth: `backend/src/config/itemRegistry.js`.
 
 | item_id | unit | commands |
 |---|---|---|
-| `raw_material_gate` | open/close | `open`, `close` |
+| `lime_stone` | open/close | `open`, `close` |
 
 ### Sensors (ESP32-2 — read-only, not relay-controlled)
 
@@ -68,7 +68,7 @@ Snapshot of every item's current value. Used by the Dashboard on initial load.
 **Response 200**
 ```json
 {
-  "limestone": { "value": 23.4, "unit": "g", "ts": 1732870000000 },
+  "gypsum": { "value": 23.4, "unit": "g", "ts": 1732870000000 },
   "crusher": { "value": "on", "unit": "on/off", "ts": 1732870001000 },
   "...": "one entry per item in the registry"
 }
@@ -96,7 +96,7 @@ button exists to click.
 { "command": "on" }
 ```
 `command` must be `"on"` or `"off"` for relay actuators, or `"open"` or
-`"close"` for `raw_material_gate`.
+`"close"` for `lime_stone`.
 
 **Response 200**
 ```json
@@ -143,12 +143,12 @@ Used by the Dashboard's "Material Targets Configuration" panel.
 
 **Body**
 ```json
-{ "limestone": 50, "clay": 50, "iron_ore": 50, "sand": 50 }
+{ "gypsum": 50, "clay": 50, "iron_ore": 50, "sand": 50 }
 ```
 
 **Response 200**
 ```json
-{ "accepted": ["limestone", "clay", "iron_ore", "sand"], "rejected": [] }
+{ "accepted": ["gypsum", "clay", "iron_ore", "sand"], "rejected": [] }
 ```
 An `item_id` lands in `rejected` if it's unknown, not dispensable, or its
 value isn't a number.
@@ -162,7 +162,7 @@ Single-item variant of the above.
 ```
 **Response 200**
 ```json
-{ "item_id": "limestone", "target": 50 }
+{ "item_id": "gypsum", "target": 50 }
 ```
 **Response 400** — `:id` is not dispensable, or `target` isn't a number.
 **Response 404** — unknown `item_id`.
@@ -172,7 +172,7 @@ List of item_ids that accept a target.
 
 **Response 200**
 ```json
-["limestone", "clay", "iron_ore", "sand"]
+["gypsum", "clay", "iron_ore", "sand"]
 ```
 
 ---
@@ -225,6 +225,14 @@ widget.html?id=iron_ore        ->  "iron_ore: 52 g"
 widget.html?id=clin_dht_temp   ->  "clin_dht_temp: 32.5 C"
 ```
 
+### `richinfo.html?id=<item_id>` — for Rich Info Hotspot Popups / Cards
+Styled rich card layout (dark theme, live status badge, formatted title, large live value, alarm alert) for embedding inside Cupola360 Rich Info popups or iFrames.
+
+```
+richinfo.html?id=iron_ore
+richinfo.html?id=klin_dht_temp
+```
+
 ### `control.html?id=<item_id>` — for actuators, TWO usage styles
 
 **Style A — embed-type hotspot** (Cupola keeps the page visible in place, the
@@ -257,7 +265,7 @@ sees both buttons and can tap the one they want.
 
 ```
 Materials / sensors (inline value):
-  widget.html?id=limestone
+  widget.html?id=gypsum
   widget.html?id=clay
   widget.html?id=iron_ore
   widget.html?id=sand
@@ -270,7 +278,7 @@ Materials / sensors (inline value):
   widget.html?id=vibration_sensor
 
 Gate Actuator (separate ON/OFF/OPEN/CLOSE URLs):
-  open.html?id=raw_material_gate
+  open.html?id=lime_stone
   cd cd 
 
 Actuators (separate ON/OFF URLs per actuator):
@@ -312,10 +320,10 @@ curl http://localhost:4000/api/items
 curl http://localhost:4000/api/item/crusher/action/on
 curl http://localhost:4000/api/item/crusher/action/off
 
-# Start dispensing 50g of limestone
+# Start dispensing 50g of gypsum
 curl -X POST http://localhost:4000/api/materials/targets \
   -H "Content-Type: application/json" \
-  -d '{"limestone": 50}'
+  -d '{"gypsum": 50}'
 
 # Health check
 curl http://localhost:4000/api/health

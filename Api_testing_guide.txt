@@ -70,7 +70,7 @@ Run this checklist top to bottom. Each has a pass/fail you can eyeball.
 | 5 | `curl http://localhost:4000/api/item/crusher/action/off` | Same, `OFF` |
 | 6 | `curl http://localhost:4000/api/item/iron_ore/action/on` | HTTP 400 — `iron_ore` isn't an actuator |
 | 7 | `curl -X POST http://localhost:4000/api/item/crusher/action -H "Content-Type: application/json" -d '{"command":"on"}'` | HTTP 200, same effect as #4 |
-| 8 | `curl -X POST http://localhost:4000/api/materials/targets -H "Content-Type: application/json" -d '{"limestone":50}'` | `{"accepted":["limestone"],"rejected":[]}`, servo moves, MQTT `target/status` goes `dispensing` then `done` |
+| 8 | `curl -X POST http://localhost:4000/api/materials/targets -H "Content-Type: application/json" -d '{"gypsum":50}'` | `{"accepted":["gypsum"],"rejected":[]}`, servo moves, MQTT `target/status` goes `dispensing` then `done` |
 | 9 | `curl -X POST http://localhost:4000/api/materials/targets -H "Content-Type: application/json" -d '{"crusher":50}'` | `crusher` lands in `rejected` (not dispensable) |
 | 10 | `curl http://localhost:4000/api/materials/dispensable` | Array of the 5 material ids |
 

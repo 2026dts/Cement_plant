@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Dedicated CLOSE Gate Widget for Cupola Integration
-  Usage: close.html?id=raw_material_gate
+  Usage: close.html?id=lime_stone
 -->
 <html lang="en">
 <head>
@@ -73,11 +73,13 @@
 
   <script src="js/ws-client.js"></script>
   <script>
-    const API_BASE = "http://localhost:4000";
-    const WS_URL   = "ws://localhost:4000/ws";
+    const backendProtocol = window.location.protocol === "https:" ? "https:" : "http:";
+    const websocketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const API_BASE = `${backendProtocol}//${window.location.hostname}:4000`;
+    const WS_URL   = `${websocketProtocol}//${window.location.hostname}:4000/ws`;
 
     const params = new URLSearchParams(window.location.search);
-    const itemId = params.get("id") || "raw_material_gate";
+    const itemId = params.get("id") || "lime_stone";
     const root = document.getElementById("root");
 
     const closeIcon = `<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2" stroke-linecap="round"/><path d="M7 11V7a5 5 0 0 1 10 0v4" stroke-linecap="round"/></svg>`;

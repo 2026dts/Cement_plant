@@ -40,15 +40,15 @@ http://localhost:4173/control.html?id=ball_mill_2&action=on
 http://localhost:4173/control.html?id=ball_mill_2&action=off
 
 
-Raw Material Gate — OPEN / CLOSE
+Lime Stone Gate — OPEN / CLOSE
 
-http://localhost:4173/control.html?id=raw_material_gate&action=open
-http://localhost:4173/control.html?id=raw_material_gate&action=close
+http://localhost:4173/control.html?id=lime_stone&action=open
+http://localhost:4173/control.html?id=lime_stone&action=close
 
 
 All Sensors + Materials — Live Value
 
-http://localhost:4173/widget.html?id=limestone
+http://localhost:4173/widget.html?id=gypsum
 http://localhost:4173/widget.html?id=clay
 http://localhost:4173/widget.html?id=iron_ore
 http://localhost:4173/widget.html?id=sand

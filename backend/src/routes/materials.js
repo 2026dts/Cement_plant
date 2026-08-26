@@ -1,7 +1,7 @@
 // Material dispensing routes - Architecture v5, Section 4.3 (Feature B).
 //
 // POST /api/materials/targets
-//   { "limestone": 50, "clay": 50, "iron_ore": 50, "sand": 50 }
+//   { "gypsum": 50, "clay": 50, "iron_ore": 50, "sand": 50 }
 //   Used by the Dashboard's "Material Targets Configuration" panel - one
 //   request applies all target values at once.
 //

@@ -2,7 +2,7 @@
 
 Everything needed to run the platform end-to-end on the current hardware:
 
-- **ESP32-1**: 4 load cells (common SCK) + 4 dispensing servos — limestone, clay,
+- **ESP32-1**: 4 load cells (common SCK) + 4 dispensing servos — gypsum, clay,
   iron_ore, and sand — plus a raw-material gate servo on GPIO25 with open/close
   control.
 - **ESP32-2**: 16-channel relay board (2x8), 13 channels wired — crusher (gangs
@@ -114,12 +114,12 @@ in `API_DOCUMENTATION.md`.
 
 Material value labels (inline, plain text):
 ```
-widget.html?id=limestone
+widget.html?id=gypsum
 widget.html?id=clay
 widget.html?id=iron_ore
 widget.html?id=sand
-control.html?id=raw_material_gate&action=open
-control.html?id=raw_material_gate&action=close
+control.html?id=lime_stone&action=open
+control.html?id=lime_stone&action=close
 ```
 
 Sensor value labels (inline, plain text):

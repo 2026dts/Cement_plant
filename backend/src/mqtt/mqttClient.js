@@ -162,11 +162,8 @@ function connect(onUpdate) {
     const updated = store.setValue(item.id, value, payload.unit || item.unit);
     if (onUpdateCallback) onUpdateCallback(item.id, { ...updated, deviceSource: item.source, deviceStatus: devStatus });
 
-    // Kiln temperature threshold control (Backend replacement for PID):
-    // Priority order:
-    //   1. Master ON/OFF Switch (Highest Priority)
-    //   2. Manual Control (Second Priority)
-    //   3. Automatic Temperature Threshold Control (Lowest Priority)
+    // Heater safety control always runs. Master/manual state is still exposed
+    // to the dashboard, but it must not allow a heater to remain on at 35 C.
     if (item.id === "klin_dht_temp") {
       evaluateKilnTempThreshold();
     }
@@ -190,51 +187,29 @@ function connect(onUpdate) {
 }
 
 function evaluateKilnTempThreshold() {
-  const isMasterActive = store.isMasterOverrideActive();
-  const isKlinManual = store.get("klin_manual_override")?.value === true || store.get("klin_manual_override")?.value === "true";
-  const isHeaterManual = store.get("klin_heater_manual_override")?.value === true || store.get("klin_heater_manual_override")?.value === "true";
-
-  // Priority 1 & 2: Do NOT run auto temp control if Master switch or Manual control is active!
-  if (isMasterActive || isKlinManual || isHeaterManual) {
-    return;
-  }
-
-  // Priority 3: Automatic Temperature Control
   const rawTemp = store.get("klin_dht_temp")?.value;
   if (rawTemp === null || rawTemp === undefined || isNaN(rawTemp)) return;
 
-  const tempInt = Math.floor(Number(rawTemp));
-  if (tempInt < 35) {
-    if (store.get("klin_heater")?.value !== "on") {
-      sendDirectCommand("klin_heater", "on");
-      const upHeater = store.setValue("klin_heater", "on", "on/off");
-      if (onUpdateCallback) onUpdateCallback("klin_heater", upHeater);
-    }
-    if (store.get("klin")?.value !== "off") {
-      sendDirectCommand("klin", "off");
-      const upKlin = store.setValue("klin", "off", "on/off");
-      if (onUpdateCallback) onUpdateCallback("klin", upKlin);
-    }
-  } else {
-    if (store.get("klin_heater")?.value !== "off") {
-      sendDirectCommand("klin_heater", "off");
-      const upHeater = store.setValue("klin_heater", "off", "on/off");
-      if (onUpdateCallback) onUpdateCallback("klin_heater", upHeater);
-    }
-    if (store.get("klin")?.value !== "on") {
-      sendDirectCommand("klin", "on");
-      const upKlin = store.setValue("klin", "on", "on/off");
-      if (onUpdateCallback) onUpdateCallback("klin", upKlin);
-    }
-  }
+  const isBelowSetpoint = Number(rawTemp) < 35;
+  setAutomaticState("klin_heater", isBelowSetpoint ? "on" : "off");
+  setAutomaticState("heat_blower", isBelowSetpoint ? "on" : "off");
+  setAutomaticState("klin", isBelowSetpoint ? "off" : "on");
 }
 
-function sendDirectCommand(item_id, command) {
+function setAutomaticState(item_id, command) {
+  if (store.get(item_id)?.value === command) return;
+  if (!sendDirectCommand(item_id, command, true)) return;
+
+  const updated = store.setValue(item_id, command, "on/off");
+  if (onUpdateCallback) onUpdateCallback(item_id, updated);
+}
+
+function sendDirectCommand(item_id, command, automatic = false) {
   const item = findItem(item_id);
   if (!item || !client || !client.connected) return false;
   const wireCommand = ACTUATOR_LOGIC_INVERTED ? invertOnOff(command) : command;
   try {
-    client.publish(topicCmd(item), JSON.stringify({ command: wireCommand }));
+    client.publish(topicCmd(item), JSON.stringify({ command: wireCommand, ...(automatic ? { mode: "auto" } : {}) }));
     return true;
   } catch (e) {
     console.error(`[MQTT] sendDirectCommand: failed for ${item_id}:`, e.message || e);

@@ -39,7 +39,7 @@ mqttClient.connect((item_id, updated) => {
   wsServer.broadcast(item_id, updated);
 });
 
-server.listen(env.PORT, () => {
+server.listen(env.PORT, "0.0.0.0", () => {
   console.log(`[Backend] Listening on http://localhost:${env.PORT}`);
   console.log(`[Backend] WebSocket endpoint: ws://localhost:${env.PORT}/ws`);
 });

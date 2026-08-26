@@ -100,7 +100,7 @@
     const params = new URLSearchParams(window.location.search);
     const itemId = params.get("id");
     const action = params.get("action"); // "on" | "off" | "open" | "close" | absent
-    const isGate = itemId === "raw_material_gate";
+    const isGate = itemId === "lime_stone";
     const commands = isGate ? ["open", "close"] : ["on", "off"];
     const root = document.getElementById("root");
 

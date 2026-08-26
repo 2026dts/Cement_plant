@@ -62,6 +62,7 @@ try {
     if (-not $SkipInstall) {
         Ensure-Dependencies $Backend
         Ensure-Dependencies $Dashboard
+        Ensure-Dependencies $Widget
     }
 
     Assert-PortAvailable 4000
@@ -71,7 +72,7 @@ try {
     Write-Host "Starting cement plant services..." -ForegroundColor Cyan
     Start-ServiceProcess $Backend "npm.cmd" @("run", "dev") | Out-Null
     Start-ServiceProcess $Dashboard "npm.cmd" @("run", "dev") | Out-Null
-    Start-ServiceProcess $Widget "npx.cmd" @("--yes", "serve", ".", "-l", "4173") | Out-Null
+    Start-ServiceProcess $Widget "npm.cmd" @("start") | Out-Null
 
     Write-Host "Dashboard: http://localhost:5173" -ForegroundColor Green
     Write-Host "Widget:    http://localhost:4173/widget.html?id=iron_ore" -ForegroundColor Green
