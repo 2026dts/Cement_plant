@@ -13,6 +13,13 @@ const express = require("express");
 const router = express.Router();
 const { findItem, dispensableItems } = require("../config/itemRegistry");
 const mqttClient = require("../mqtt/mqttClient");
+const hivemqClient = require("../mqtt/hivemqClient");
+
+function publishTargetToAvailableBrokers(item_id, target) {
+  const localPublished = mqttClient.publishTarget(item_id, target);
+  const cloudPublished = hivemqClient.publishTarget(item_id, target);
+  return localPublished || cloudPublished;
+}
 
 router.post("/materials/targets", (req, res) => {
   console.log(`[API] POST /api/materials/targets - body: ${JSON.stringify(req.body)}`);
@@ -22,7 +29,7 @@ router.post("/materials/targets", (req, res) => {
   for (const [item_id, target] of Object.entries(req.body || {})) {
     const item = findItem(item_id);
     if (item && item.dispensable && typeof target === "number") {
-      const ok = mqttClient.publishTarget(item_id, target);
+      const ok = publishTargetToAvailableBrokers(item_id, target);
       if (ok) {
         accepted.push(item_id);
       } else {
@@ -47,7 +54,7 @@ router.post("/item/:id/target", (req, res) => {
     return res.status(400).json({ error: "target must be a number" });
   }
 
-  const ok = mqttClient.publishTarget(item.id, target);
+  const ok = publishTargetToAvailableBrokers(item.id, target);
   if (!ok) return res.status(500).json({ error: "Failed to publish target to MQTT broker" });
   res.json({ item_id: item.id, target });
 });

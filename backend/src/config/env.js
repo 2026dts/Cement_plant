@@ -13,4 +13,9 @@ module.exports = {
   THINGSBOARD_PASSWORD: process.env.THINGSBOARD_PASSWORD || "tenant",
   ESP1_DEVICE_ID: process.env.ESP1_DEVICE_ID || "",
   ESP2_DEVICE_ID: process.env.ESP2_DEVICE_ID || "",
+  // HiveMQ Cloud Broker
+  HIVEMQ_HOST: process.env.HIVEMQ_HOST || "",
+  HIVEMQ_PORT: parseInt(process.env.HIVEMQ_PORT || "8883", 10),
+  HIVEMQ_USER: process.env.HIVEMQ_USER || "",
+  HIVEMQ_PASSWORD: process.env.HIVEMQ_PASSWORD || "",
 };

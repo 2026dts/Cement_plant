@@ -1,6 +1,8 @@
 # ESP32 Digital Twin Platform — API Documentation
 
 Base URL (default local dev): `http://localhost:4000`
+
+MQTT topic prefix: `plant/cement-dubai/`
 WebSocket URL (default local dev): `ws://localhost:4000/ws`
 
 All data is live-only — nothing is stored to disk. Every value shown anywhere

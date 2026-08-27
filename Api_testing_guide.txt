@@ -25,21 +25,21 @@ Before touching the backend at all, watch the raw MQTT traffic.
 
 ```bash
 # Everything from both boards
-mosquitto_sub -h 192.168.0.2 -t 'plant/#' -v
+mosquitto_sub -h 192.168.0.2 -t 'plant/cement-dubai/#' -v
 
 # Just one item while you debug it
-mosquitto_sub -h 192.168.0.2 -t 'plant/esp2/klin_dht_temp' -v
+mosquitto_sub -h 192.168.0.2 -t 'plant/cement-dubai/esp2/klin_dht_temp' -v
 ```
 
 **Pass criteria:**
-- `plant/esp1/status` and `plant/esp2/status` show `{"value":"online"}` retained.
+- `plant/cement-dubai/esp1/status` and `plant/cement-dubai/esp2/status` show `{"value":"online"}` retained.
 - Every material/sensor topic updates on its expected interval (150ms for
   esp1 telemetry, 2s for esp2 DHT/vibration).
 - Firing a manual command round-trips:
   ```bash
-  mosquitto_pub -h 192.168.0.2 -t 'plant/esp2/crusher/cmd' -m '{"command":"on"}'
+  mosquitto_pub -h 192.168.0.2 -t 'plant/cement-dubai/esp2/crusher/cmd' -m '{"command":"on"}'
   ```
-  then confirm `plant/esp2/crusher` publishes back `{"value":"on"}`.
+  then confirm `plant/cement-dubai/esp2/crusher` publishes back `{"value":"on"}`.
 
 If this layer is broken, no amount of backend/Cupola debugging will fix it —
 fix wiring/firmware/broker first.
@@ -66,7 +66,7 @@ Run this checklist top to bottom. Each has a pass/fail you can eyeball.
 | 1 | `curl http://localhost:4000/api/items` | JSON object, one key per registry item, no `undefined`/`null` values after boards have been up >5s |
 | 2 | `curl http://localhost:4000/api/item/iron_ore` | `{"item_id":"iron_ore","value":...,"unit":"g","ts":...}` |
 | 3 | `curl http://localhost:4000/api/item/does_not_exist` | HTTP 404 |
-| 4 | `curl http://localhost:4000/api/item/crusher/action/on` | `text/plain` body `CRUSHER: ON`, relay physically clicks, `plant/esp2/crusher` MQTT updates to `on` |
+| 4 | `curl http://localhost:4000/api/item/crusher/action/on` | `text/plain` body `CRUSHER: ON`, relay physically clicks, `plant/cement-dubai/esp2/crusher` MQTT updates to `on` |
 | 5 | `curl http://localhost:4000/api/item/crusher/action/off` | Same, `OFF` |
 | 6 | `curl http://localhost:4000/api/item/iron_ore/action/on` | HTTP 400 — `iron_ore` isn't an actuator |
 | 7 | `curl -X POST http://localhost:4000/api/item/crusher/action -H "Content-Type: application/json" -d '{"command":"on"}'` | HTTP 200, same effect as #4 |
@@ -74,7 +74,7 @@ Run this checklist top to bottom. Each has a pass/fail you can eyeball.
 | 9 | `curl -X POST http://localhost:4000/api/materials/targets -H "Content-Type: application/json" -d '{"crusher":50}'` | `crusher` lands in `rejected` (not dispensable) |
 | 10 | `curl http://localhost:4000/api/materials/dispensable` | Array of the 5 material ids |
 
-For step 8/9, keep `mosquitto_sub -t 'plant/#' -v` running in a second
+For step 8/9, keep `mosquitto_sub -t 'plant/cement-dubai/#' -v` running in a second
 terminal so you see the MQTT round-trip, not just the HTTP response — the
 HTTP call succeeding doesn't guarantee the ESP32 actually received it.
 

@@ -18,6 +18,19 @@ const express = require("express");
 const router = express.Router();
 const { findItem } = require("../config/itemRegistry");
 const mqttClient = require("../mqtt/mqttClient");
+const hivemqClient = require("../mqtt/hivemqClient");
+
+function publishCommandToAvailableBrokers(item_id, command) {
+  const localPublished = mqttClient.publishCommand(item_id, command);
+  const cloudPublished = hivemqClient.publishCommand(item_id, command);
+  return localPublished || cloudPublished;
+}
+
+function publishResumeAutoToAvailableBrokers(item_id) {
+  const localPublished = mqttClient.publishResumeAuto(item_id);
+  const cloudPublished = hivemqClient.publishResumeAuto(item_id);
+  return localPublished || cloudPublished;
+}
 
 function assertActuator(req, res) {
   const item = findItem(req.params.id);
@@ -48,7 +61,7 @@ router.post("/item/:id/action", (req, res) => {
       : 'command must be "on" or "off"' });
   }
 
-  mqttClient.publishCommand(item.id, command);
+  publishCommandToAvailableBrokers(item.id, command);
   res.json({ item_id: item.id, command });
 });
 
@@ -56,7 +69,7 @@ router.get("/item/:id/action/on", (req, res) => {
   const item = assertActuator(req, res);
   if (!item) return;
   if (item.gate) return res.status(400).send("Use open/close for gate actuators");
-  mqttClient.publishCommand(item.id, "on");
+  publishCommandToAvailableBrokers(item.id, "on");
   res.type("text/plain").send(`${item.id.toUpperCase()}: ON`);
 });
 
@@ -64,7 +77,7 @@ router.get("/item/:id/action/off", (req, res) => {
   const item = assertActuator(req, res);
   if (!item) return;
   if (item.gate) return res.status(400).send("Use open/close for gate actuators");
-  mqttClient.publishCommand(item.id, "off");
+  publishCommandToAvailableBrokers(item.id, "off");
   res.type("text/plain").send(`${item.id.toUpperCase()}: OFF`);
 });
 
@@ -72,7 +85,7 @@ router.get("/item/:id/action/open", (req, res) => {
   const item = assertActuator(req, res);
   if (!item) return;
   if (!item.gate) return res.status(400).send("Only gate actuators support open/close");
-  mqttClient.publishCommand(item.id, "open");
+  publishCommandToAvailableBrokers(item.id, "open");
   res.type("text/plain").send(`${item.id.toUpperCase()}: OPEN`);
 });
 
@@ -80,7 +93,7 @@ router.get("/item/:id/action/close", (req, res) => {
   const item = assertActuator(req, res);
   if (!item) return;
   if (!item.gate) return res.status(400).send("Only gate actuators support open/close");
-  mqttClient.publishCommand(item.id, "close");
+  publishCommandToAvailableBrokers(item.id, "close");
   res.type("text/plain").send(`${item.id.toUpperCase()}: CLOSE`);
 });
 
@@ -97,7 +110,7 @@ router.all(["/item/:id/on", "/item/:id/off", "/item/:id/open", "/item/:id/close"
     return res.status(400).json({ error: "Only gate actuators support /open and /close" });
   }
 
-  mqttClient.publishCommand(item.id, pathAction);
+  publishCommandToAvailableBrokers(item.id, pathAction);
   
   if (req.headers.accept && req.headers.accept.includes("application/json")) {
     return res.json({ item_id: item.id, command: pathAction });
@@ -111,7 +124,7 @@ router.post("/item/:id/resume-auto", (req, res) => {
   if (item.id !== "klin" && item.id !== "klin_heater") {
     return res.status(400).json({ error: "Only klin and klin_heater support auto PID mode" });
   }
-  mqttClient.publishResumeAuto(item.id);
+  publishResumeAutoToAvailableBrokers(item.id);
   res.json({ item_id: item.id, status: "auto_resumed" });
 });
 
@@ -122,12 +135,13 @@ router.post("/actuators/master", (req, res) => {
     return res.status(400).json({ error: 'command must be "on" or "off"' });
   }
 
-  const result = mqttClient.publishMasterCommand(command);
+  const localResult = mqttClient.publishMasterCommand(command);
+  const cloudResult = hivemqClient.publishMasterCommand(command);
   res.json({
     status: "success",
     command,
-    publishedCount: result.count,
-    totalActuators: result.total,
+    publishedCount: Math.max(localResult.count, cloudResult.count),
+    totalActuators: Math.max(localResult.total, cloudResult.total),
     timestamp: Date.now(),
   });
 });

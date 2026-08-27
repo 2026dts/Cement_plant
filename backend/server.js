@@ -10,6 +10,7 @@ const http = require("http");
 
 const env = require("./src/config/env");
 const mqttClient = require("./src/mqtt/mqttClient");
+const hivemqClient = require("./src/mqtt/hivemqClient");
 const wsServer = require("./src/ws/wsServer");
 
 const itemsRoutes = require("./src/routes/items");
@@ -39,7 +40,14 @@ mqttClient.connect((item_id, updated) => {
   wsServer.broadcast(item_id, updated);
 });
 
+// HiveMQ Cloud broker — connects in parallel using the same shared store.
+// If HIVEMQ_HOST is not set in .env, this call is a no-op and is safely skipped.
+hivemqClient.connect((item_id, updated) => {
+  wsServer.broadcast(item_id, updated);
+});
+
 server.listen(env.PORT, "0.0.0.0", () => {
   console.log(`[Backend] Listening on http://localhost:${env.PORT}`);
   console.log(`[Backend] WebSocket endpoint: ws://localhost:${env.PORT}/ws`);
 });
+

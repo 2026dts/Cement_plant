@@ -1,5 +1,5 @@
-/*
-  ESP32-2 — 16-Channel Relay Board (2 x 8ch) + 3x DHT11 + 1x Vibration Sensor
+﻿/*
+  ESP32-2 â€” 16-Channel Relay Board (2 x 8ch) + 3x DHT11 + 1x Vibration Sensor
   Mosquitto MQTT
   ======================================================================================
   Hardware on this board:
@@ -90,6 +90,7 @@
 */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <DHT.h>
@@ -101,16 +102,16 @@
 // ---------------------------- USER CONFIGURATION ---------------------------
 // ============================================================================
 constexpr char FIRMWARE_TITLE[]   = "esp2_relay";
-constexpr char FIRMWARE_VERSION[] = "1.0.0";
+constexpr char FIRMWARE_VERSION[] = "1.0.0-hive";
 
 
 constexpr char WIFI_SSID[]     = "ACT-ai_103812010408";
 constexpr char WIFI_PASSWORD[] = "33346558";
 
-constexpr char MQTT_BROKER_HOST[] = "192.168.0.3";    // local Mosquitto machine's LAN IP
-constexpr uint16_t MQTT_BROKER_PORT = 1883U;
-constexpr char MQTT_USER[]     = "esp2";               // ThingsBoard Access Token for ESP2
-constexpr char MQTT_PASSWORD[] = "";
+constexpr char MQTT_BROKER_HOST[] = "5c0b21424f334243b66237dfd2f9b565.s1.eu.hivemq.cloud"; // HiveMQ Cloud
+constexpr uint16_t MQTT_BROKER_PORT = 8883U;  // HiveMQ TLS port
+constexpr char MQTT_USER[]     = "admin";          // HiveMQ Cloud username
+constexpr char MQTT_PASSWORD[] = "Admin@321";
 constexpr char MQTT_CLIENT_ID[] = "esp2-relay";
 
 constexpr uint32_t MQTT_RECONNECT_DELAY_MS = 2000UL;
@@ -183,7 +184,7 @@ const int MOTOR_OFF_BASELINE = 0;
 // ============================================================================
 // ------------------------------- MQTT CLIENT --------------------------------
 // ============================================================================
-WiFiClient   espClient;
+WiFiClientSecure espClient;
 PubSubClient mqtt(espClient);
 
 unsigned long lastReconnectAttemptMs = 0;
@@ -651,6 +652,7 @@ void setup() {
   analogSetAttenuation(ADC_11db);
 
   initWiFi();
+  espClient.setInsecure(); // Allow TLS without certificate validation (HiveMQ Cloud)
   mqtt.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
   mqtt.setCallback(mqttCallback);
 
@@ -686,3 +688,5 @@ void loop() {
   }
 
 }
+
+

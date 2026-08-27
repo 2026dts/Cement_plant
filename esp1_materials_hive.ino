@@ -1,5 +1,5 @@
-/*
-  ESP32-1 — 4x Load Cell + 5x Servo (Material Dispensing + Raw Gate) — Mosquitto MQTT
+﻿/*
+  ESP32-1 â€” 4x Load Cell + 5x Servo (Material Dispensing + Raw Gate) â€” Mosquitto MQTT
   ==========================================================================
   Hardware on this board:
     - 4x 20kg load cells (HX711), all sharing ONE common SCK pin, each with
@@ -10,7 +10,7 @@
     - 1x raw-material gate servo on GPIO25, controlled independently with
       open/close commands.
 
-  Calibration factor (96.322) is kept EXACTLY as supplied — do not change
+  Calibration factor (96.322) is kept EXACTLY as supplied â€” do not change
   this value, only re-use it per load cell / servo pair below.
 
   ================================ LIBRARIES ================================
@@ -44,7 +44,7 @@
   At boot, each channel's HX711 is brought up with a bounded timeout instead
   of an unbounded blocking wait. If a particular load cell's chip never
   responds (bad wiring / no power / floating DOUT), that ONE channel is
-  marked failed and skipped — it will NOT hang the other 4 channels or the
+  marked failed and skipped â€” it will NOT hang the other 4 channels or the
   rest of setup(). Failed channels are retried automatically later from
   loop() via serviceTaring().
 
@@ -55,11 +55,12 @@
     - it stays at SERVO_MAX_ANGLE until that material's load cell reaches the
       target weight
     - only then does that specific servo return to SERVO_HOME_ANGLE
-  Every material is independent — one material dispensing does not affect any
+  Every material is independent â€” one material dispensing does not affect any
   other material's servo/state. The raw-material gate is controlled separately.
 */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <HX711.h>
@@ -72,16 +73,16 @@
 // ---------------------------- USER CONFIGURATION ---------------------------
 // ============================================================================
 constexpr char FIRMWARE_TITLE[]   = "esp1_materials";
-constexpr char FIRMWARE_VERSION[] = "1.0.0";
+constexpr char FIRMWARE_VERSION[] = "1.0.0-hive";
 
 
 constexpr char WIFI_SSID[]     = "ACT-ai_103812010408";
 constexpr char WIFI_PASSWORD[] = "33346558";
 
-constexpr char MQTT_BROKER_HOST[] = "192.168.0.3";   // local Mosquitto machine's LAN IP
-constexpr uint16_t MQTT_BROKER_PORT = 1883U;
-constexpr char MQTT_USER[]     = "esp1";              // ThingsBoard Access Token for ESP1
-constexpr char MQTT_PASSWORD[] = "";
+constexpr char MQTT_BROKER_HOST[] = "5c0b21424f334243b66237dfd2f9b565.s1.eu.hivemq.cloud"; // HiveMQ Cloud
+constexpr uint16_t MQTT_BROKER_PORT = 8883U;  // HiveMQ TLS port
+constexpr char MQTT_USER[]     = "admin";          // HiveMQ Cloud username
+constexpr char MQTT_PASSWORD[] = "Admin@321";
 constexpr char MQTT_CLIENT_ID[] = "esp1-materials";
 
 constexpr uint32_t TELEMETRY_INTERVAL_MS   = 500UL;   // live weight publish interval
@@ -134,7 +135,7 @@ bool limeStoneGateOpen = false;
 // ============================================================================
 // ------------------------------- MQTT CLIENT --------------------------------
 // ============================================================================
-WiFiClient   espClient;
+WiFiClientSecure espClient;
 PubSubClient mqtt(espClient);
 
 unsigned long lastTelemetryMs        = 0;
@@ -626,6 +627,7 @@ void setup() {
 
   // ---- Step 1: WiFi first ----
   initWiFi();
+  espClient.setInsecure(); // Allow TLS without certificate validation (HiveMQ Cloud)
 
   // ---- Step 2: MQTT broker next ----
   mqtt.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
