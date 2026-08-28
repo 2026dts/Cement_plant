@@ -2,7 +2,20 @@ const express = require("express");
 const store = require("../state/store");
 const env = require("../config/env");
 const thingsboardService = require("../services/thingsboardService");
-const { publishOtaCommand, publishRebootCommand } = require("../mqtt/mqttClient");
+const mqttClient = require("../mqtt/mqttClient");
+const hivemqClient = require("../mqtt/hivemqClient");
+
+function publishOtaToBrokers(target, title, version, extra) {
+  const localOk = mqttClient.publishOtaCommand(target, title, version, extra);
+  const cloudOk = hivemqClient.publishOtaCommand(target, title, version, extra);
+  return localOk || cloudOk;
+}
+
+function publishRebootToBrokers(target) {
+  const localOk = mqttClient.publishRebootCommand(target);
+  const cloudOk = hivemqClient.publishRebootCommand(target);
+  return localOk || cloudOk;
+}
 
 const router = express.Router();
 
@@ -55,9 +68,14 @@ router.post("/trigger", express.json(), async (req, res) => {
       deviceId: env.ESP1_DEVICE_ID,
       title: t1,
       version: v1,
+      deviceToken: env.ESP1_ACCESS_TOKEN,
     });
-    const mqttOk1 = publishOtaCommand("esp1", t1, v1);
-    results.push({ device: "esp1", title: t1, version: v1, tbSuccess: tbRes1.success, mqttSuccess: mqttOk1 });
+    const title1 = tbRes1.title || t1;
+    const mqttOk1 = publishOtaToBrokers("esp1", title1, v1, {
+      url: tbRes1.fwUrl,
+      checksum: tbRes1.checksum,
+    });
+    results.push({ device: "esp1", title: title1, version: v1, tbSuccess: tbRes1.success, mqttSuccess: mqttOk1 });
   }
 
   // ---- ESP2 Trigger ----
@@ -66,9 +84,14 @@ router.post("/trigger", express.json(), async (req, res) => {
       deviceId: env.ESP2_DEVICE_ID,
       title: t2,
       version: v2,
+      deviceToken: env.ESP2_ACCESS_TOKEN,
     });
-    const mqttOk2 = publishOtaCommand("esp2", t2, v2);
-    results.push({ device: "esp2", title: t2, version: v2, tbSuccess: tbRes2.success, mqttSuccess: mqttOk2 });
+    const title2 = tbRes2.title || t2;
+    const mqttOk2 = publishOtaToBrokers("esp2", title2, v2, {
+      url: tbRes2.fwUrl,
+      checksum: tbRes2.checksum,
+    });
+    results.push({ device: "esp2", title: title2, version: v2, tbSuccess: tbRes2.success, mqttSuccess: mqttOk2 });
   }
 
   res.json({
@@ -88,13 +111,13 @@ router.post("/reboot", express.json(), async (req, res) => {
 
   if (targetDevice === "esp1" || targetDevice === "all") {
     const tbOk1 = await thingsboardService.sendRpcReboot(env.ESP1_DEVICE_ID);
-    const mqttOk1 = publishRebootCommand("esp1");
+    const mqttOk1 = publishRebootToBrokers("esp1");
     results.push({ device: "esp1", tbSuccess: tbOk1, mqttSuccess: mqttOk1 });
   }
 
   if (targetDevice === "esp2" || targetDevice === "all") {
     const tbOk2 = await thingsboardService.sendRpcReboot(env.ESP2_DEVICE_ID);
-    const mqttOk2 = publishRebootCommand("esp2");
+    const mqttOk2 = publishRebootToBrokers("esp2");
     results.push({ device: "esp2", tbSuccess: tbOk2, mqttSuccess: mqttOk2 });
   }
 

@@ -5,10 +5,11 @@
 //   - the dashboard tile list
 //   - which widget URL gets pasted into each Cupola hotspot
 //
-// `source` is the ESP topic segment used in MQTT topics: plant/<source>/<id>
-// (matches the topic naming already used in the ESP32 firmware).
+// `source` is the ESP board segment used in common MQTT topics:
+// plant/cement-dubai/<source>/command|values|status|actuator/...
+// Item identity is in the JSON payload (material / sensor / actuator), not the topic.
 // `dispensable` marks materials that have a servo + load-cell closed loop
-// (Feature B in Architecture v5) and therefore accept a `/target/cmd` message.
+// and therefore accept a target command on the ESP1 command topic.
 
 const ITEM_REGISTRY = [
   // ---- ESP1: 4 load-cell + servo pairs (all dispensable) ----

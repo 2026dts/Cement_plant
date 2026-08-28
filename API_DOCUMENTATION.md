@@ -301,14 +301,20 @@ Combined dual-button control (optional):
 Not called directly by any frontend — documented here for reference when
 debugging with `mosquitto_sub`/`mosquitto_pub`.
 
-| Topic pattern | Direction | Payload | Used for |
+| Topic | Direction | Payload | Used for |
 |---|---|---|---|
-| `plant/<esp>/<item_id>` | ESP32 -> backend | `{ "value": 52, "unit": "g" }` | live sensor/material readings, and relay state |
-| `plant/<esp>/<item_id>/cmd` | backend -> ESP32 | `{ "command": "on" \| "off" }` | actuator ON/OFF |
-| `plant/<esp>/<item_id>/target/cmd` | backend -> ESP32 | `{ "target": 50 }` | start dispensing (materials only) |
-| `plant/<esp>/<item_id>/target/status` | ESP32 -> backend | `{ "status": "dispensing" \| "done" }` | dispensing progress |
+| `plant/cement-dubai/esp1/command` | backend -> ESP1 | `{ "type":"material","material":"gypsum","action":"target","target":50 }` | start dispensing |
+| `plant/cement-dubai/esp1/values` | ESP1 -> backend | `{ "type":"material","material":"gypsum","value":23.4,"unit":"g" }` | live weights |
+| `plant/cement-dubai/esp1/status` | ESP1 -> backend | LWT `{ "value":"online" }` or dispense `{ "type":"material","material","target","status" }` | device + dispense status |
+| `plant/cement-dubai/esp1/actuator/command` | backend -> ESP1 | `{ "type":"actuator","actuator":"lime_stone","command":"open" }` | gate command |
+| `plant/cement-dubai/esp1/actuator/state` | ESP1 -> backend | `{ "type":"actuator","actuator":"lime_stone","value":"open" }` | gate state |
+| `plant/cement-dubai/esp2/values` | ESP2 -> backend | `{ "type":"sensor","sensor":"klin_dht_temp","value":34.0,"unit":"C" }` | live sensors |
+| `plant/cement-dubai/esp2/actuator/command` | backend -> ESP2 | `{ "type":"actuator","actuator":"crusher","command":"on" }` | relay ON/OFF |
+| `plant/cement-dubai/esp2/actuator/state` | ESP2 -> backend | `{ "type":"actuator","actuator":"crusher","value":"on" }` | relay state |
+| `plant/cement-dubai/esp2/override/command` | backend -> ESP2 | `{ "actuator":"klin","command":"auto" }` | resume PID/auto |
+| `plant/cement-dubai/esp2/override/status` | ESP2 -> backend | `{ "type":"override","actuator":"klin","manual_override":true }` | manual-override flag |
 
-`<esp>` is `esp1` for materials, `esp2` for everything on the relay/sensor board.
+Identity is in the payload (`material` / `sensor` / `actuator`), not in the topic. OTA and reboot topics are unchanged. Full list: `MQTT_TOPICS_REFERENCE.txt`.
 
 ---
 

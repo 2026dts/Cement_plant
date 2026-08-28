@@ -3,6 +3,11 @@ const env = require("../config/env");
 let jwtToken = null;
 let tokenExpiry = 0;
 
+function titlesMatch(a, b) {
+  const norm = (v) => String(v || "").toLowerCase().replace(/[\s_-]+/g, "");
+  return norm(a) === norm(b);
+}
+
 // ---- Authenticate with ThingsBoard REST API ----
 async function authenticate() {
   if (!env.THINGSBOARD_URL || !env.THINGSBOARD_USERNAME) {
@@ -118,6 +123,7 @@ async function assignOtaPackage({ deviceId, title, version, deviceToken }) {
   let checksum = "";
   let checksumAlgorithm = "SHA-256";
   let dataSize = 0;
+  let resolvedTitle = title;
 
   // 1. Search for matching otaPackage in ThingsBoard repository
   if (token) {
@@ -127,13 +133,16 @@ async function assignOtaPackage({ deviceId, title, version, deviceToken }) {
       });
       if (pkgRes.ok) {
         const pkgData = await pkgRes.json();
-        const found = (pkgData.data || []).find(p => p.title === title && p.version === version);
+        const found = (pkgData.data || []).find(
+          (p) => titlesMatch(p.title, title) && String(p.version) === String(version)
+        );
         if (found) {
           packageId = found.id?.id;
           checksum = found.checksum || "";
           checksumAlgorithm = found.checksumAlgorithm || "SHA-256";
           dataSize = found.dataSize || 0;
-          console.log(`[ThingsBoard API] Found matching OTA package ${title} v${version} (ID: ${packageId})`);
+          resolvedTitle = found.title || title;
+          console.log(`[ThingsBoard API] Found matching OTA package "${resolvedTitle}" v${version} (ID: ${packageId})`);
         }
       }
     } catch (e) {
@@ -167,18 +176,19 @@ async function assignOtaPackage({ deviceId, title, version, deviceToken }) {
     }
   }
 
-  // 3. Construct ThingsBoard device HTTP download URL (/api/v1/$TOKEN/firmware)
-  const tokenPath = deviceToken || env.MQTT_USER || "esp1_token";
-  const fwUrl = `${host}/api/v1/${tokenPath}/firmware?title=${encodeURIComponent(title)}&version=${encodeURIComponent(version)}`;
+  // Use the exact ThingsBoard package title (e.g. "esp2 relay") in the download URL.
+  const packageTitle = resolvedTitle;
+  const tokenPath = deviceToken || env.MQTT_USER || "esp1";
+  const fwUrl = `${host}/api/v1/${tokenPath}/firmware?title=${encodeURIComponent(packageTitle)}&version=${encodeURIComponent(version)}`;
 
   const attributes = {
-    fw_title: title,
+    fw_title: packageTitle,
     fw_version: version,
     fw_checksum: checksum,
     fw_checksum_algorithm: checksumAlgorithm,
     fw_size: dataSize,
     fw_url: fwUrl,
-    target_fw_title: title,
+    target_fw_title: packageTitle,
     target_fw_version: version,
   };
 
@@ -198,7 +208,7 @@ async function assignOtaPackage({ deviceId, title, version, deviceToken }) {
     }
   }
 
-  return { success: true, attributes, fwUrl };
+  return { success: true, attributes, fwUrl, title: packageTitle, checksum };
 }
 
 // ---- Send ThingsBoard Server-Side RPC reboot request ----

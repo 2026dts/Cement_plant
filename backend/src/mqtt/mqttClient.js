@@ -1,38 +1,43 @@
 // MQTT client for the local Mosquitto broker (Architecture v4/v5).
 // -----------------------------------------------------------------------------
-// This is the ONLY module that speaks MQTT. It:
-//   - subscribes to every item's live-value topic:      plant/<source>/<id>
-//   - subscribes to every dispensable item's status:    plant/<source>/<id>/target/status
-//   - exposes publish helpers used by the REST routes to send commands/targets
+// Common-topic architecture: identity lives in the JSON payload, not the topic.
+//   ESP1: command / values / status / actuator/command / actuator/state
+//   ESP2: values / status / actuator/command / actuator/state / override/*
+// OTA, reboot, and ThingsBoard topics stay device-level (unchanged).
 
 const mqtt = require("mqtt");
 const env = require("../config/env");
-const { ITEM_REGISTRY, findItem } = require("../config/itemRegistry");
+const { ITEM_REGISTRY, findItem, dispensableItems } = require("../config/itemRegistry");
 const store = require("../state/store");
 
 let client = null;
-let onUpdateCallback = null; // wired up by server.js -> broadcasts over WebSocket
+let onUpdateCallback = null;
 
-// Relay ON/OFF logic alignment (ESP32 firmware handles active-low hardware logic natively)
 const ACTUATOR_LOGIC_INVERTED = false;
+const PREFIX = "plant/cement-dubai";
 
 function invertOnOff(v) {
   if (v === "on") return "off";
   if (v === "off") return "on";
-  return v; // not an on/off value (e.g. a numeric sensor reading) - leave as-is
+  return v;
 }
 
-function topicValue(item) {
-  return `plant/cement-dubai/${item.source}/${item.id}`;
+function topicCommand(source)        { return `${PREFIX}/${source}/command`; }
+function topicValues(source)         { return `${PREFIX}/${source}/values`; }
+function topicStatus(source)         { return `${PREFIX}/${source}/status`; }
+function topicActuatorCommand(source){ return `${PREFIX}/${source}/actuator/command`; }
+function topicActuatorState(source)  { return `${PREFIX}/${source}/actuator/state`; }
+function topicOverrideCommand()      { return `${PREFIX}/esp2/override/command`; }
+function topicOverrideStatus()       { return `${PREFIX}/esp2/override/status`; }
+
+function itemIdFromPayload(payload) {
+  return payload.material || payload.sensor || payload.actuator || payload.item_id || null;
 }
-function topicCmd(item) {
-  return `plant/cement-dubai/${item.source}/${item.id}/cmd`;
-}
-function topicTargetCmd(item) {
-  return `plant/cement-dubai/${item.source}/${item.id}/target/cmd`;
-}
-function topicTargetStatus(item) {
-  return `plant/cement-dubai/${item.source}/${item.id}/target/status`;
+
+function payloadValue(payload) {
+  if (payload.value !== undefined) return payload.value;
+  if (payload.state !== undefined) return payload.state;
+  return undefined;
 }
 
 function connect(onUpdate) {
@@ -50,22 +55,17 @@ function connect(onUpdate) {
 
   client.on("connect", () => {
     console.log("[MQTT] Connected to Mosquitto.");
-    ITEM_REGISTRY.forEach((item) => {
-      client.subscribe(topicValue(item));
-      if (item.dispensable) {
-        client.subscribe(topicTargetStatus(item));
-      }
-    });
-    // Subscribe to status and override topics
-    client.subscribe("plant/cement-dubai/esp1/status");
-    client.subscribe("plant/cement-dubai/esp2/status");
-    client.subscribe("plant/cement-dubai/esp2/klin/manual_override");
-    client.subscribe("plant/cement-dubai/esp2/klin_heater/manual_override");
-    // Subscribe to OTA version and status topics
-    client.subscribe("plant/cement-dubai/esp1/version");
-    client.subscribe("plant/cement-dubai/esp2/version");
-    client.subscribe("plant/cement-dubai/esp1/ota/status");
-    client.subscribe("plant/cement-dubai/esp2/ota/status");
+    client.subscribe(topicValues("esp1"));
+    client.subscribe(topicStatus("esp1"));
+    client.subscribe(topicActuatorState("esp1"));
+    client.subscribe(topicValues("esp2"));
+    client.subscribe(topicStatus("esp2"));
+    client.subscribe(topicActuatorState("esp2"));
+    client.subscribe(topicOverrideStatus());
+    client.subscribe(`${PREFIX}/esp1/version`);
+    client.subscribe(`${PREFIX}/esp2/version`);
+    client.subscribe(`${PREFIX}/esp1/ota/status`);
+    client.subscribe(`${PREFIX}/esp2/ota/status`);
     client.subscribe("v1/devices/me/telemetry");
   });
 
@@ -80,115 +80,189 @@ function connect(onUpdate) {
       console.warn(`[MQTT] Non-JSON payload on ${topic}, ignoring`);
       return;
     }
-
-    // Handle ESP1 LWT / device status topic
-    if (topic === "plant/cement-dubai/esp1/status") {
-      const devStatus = store.setDeviceStatus("esp1", payload.value);
-      const updated = store.setValue("esp1_status", payload.value, "");
-      if (onUpdateCallback) onUpdateCallback("esp1_status", { ...updated, deviceStatus: devStatus });
-      return;
-    }
-
-    // Handle ESP2 LWT / device status topic
-    if (topic === "plant/cement-dubai/esp2/status") {
-      const devStatus = store.setDeviceStatus("esp2", payload.value);
-      const updated = store.setValue("esp2_status", payload.value, "");
-      if (onUpdateCallback) onUpdateCallback("esp2_status", { ...updated, deviceStatus: devStatus });
-      return;
-    }
-
-    // Handle klin / klin_heater manual override topics
-    if (topic === "plant/cement-dubai/esp2/klin/manual_override") {
-      const updated = store.setValue("klin_manual_override", payload.value, "");
-      if (onUpdateCallback) onUpdateCallback("klin_manual_override", updated);
-      return;
-    }
-    if (topic === "plant/cement-dubai/esp2/klin_heater/manual_override") {
-      const updated = store.setValue("klin_heater_manual_override", payload.value, "");
-      if (onUpdateCallback) onUpdateCallback("klin_heater_manual_override", updated);
-      return;
-    }
-
-    // Handle ESP1 & ESP2 version topics
-    if (topic === "plant/cement-dubai/esp1/version" || topic === "plant/cement-dubai/esp2/version") {
-      const dev = topic.includes("esp1") ? "esp1" : "esp2";
-      const otaData = store.setOtaStatus(dev, { version: payload.version, title: payload.title });
-      if (onUpdateCallback) onUpdateCallback("ota_status", { device: dev, ...otaData });
-      return;
-    }
-
-    // Handle ESP1 & ESP2 OTA status topics
-    if (topic === "plant/cement-dubai/esp1/ota/status" || topic === "plant/cement-dubai/esp2/ota/status") {
-      const dev = topic.includes("esp1") ? "esp1" : "esp2";
-      const otaData = store.setOtaStatus(dev, payload);
-      if (onUpdateCallback) onUpdateCallback("ota_status", { device: dev, ...otaData });
-      return;
-    }
-
-    // Handle ThingsBoard telemetry topic
-    if (topic === "v1/devices/me/telemetry") {
-      if (payload.current_fw_title && payload.current_fw_version) {
-        const dev = payload.current_fw_title.includes("esp1") ? "esp1" : "esp2";
-        
-        // Forward the telemetry to ThingsBoard HTTP API using device token (esp1 or esp2)
-        const thingsboardService = require("../services/thingsboardService");
-        thingsboardService.sendTelemetry(dev, payload);
-
-        const otaData = store.setOtaStatus(dev, {
-          version: payload.current_fw_version,
-          status: payload.fw_state ? payload.fw_state.toLowerCase() : "idle"
-        });
-        if (onUpdateCallback) onUpdateCallback("ota_status", { device: dev, ...otaData });
-      }
-      return;
-    }
-
-    const item = ITEM_REGISTRY.find(
-      (i) => topic === topicValue(i) || topic === topicTargetStatus(i)
-    );
-    if (!item) return;
-
-    // Whenever any telemetry or status message arrives from a device (esp1 or esp2),
-    // mark that device as online and record its lastSeen timestamp!
-    const devStatus = store.setDeviceStatus(item.source, "online");
-
-    if (topic === topicTargetStatus(item)) {
-      const updated = store.setDispenseStatus(item.id, payload.status);
-      if (onUpdateCallback) onUpdateCallback(item.id, { ...updated, deviceSource: item.source, deviceStatus: devStatus });
-      return;
-    }
-
-    // Normal live-value update. For actuators, undo the relay board's
-    // inversion so the stored/broadcast state matches reality.
-    let value = payload.value;
-    if (ACTUATOR_LOGIC_INVERTED && item.type === "actuator") {
-      value = invertOnOff(value);
-    }
-    const updated = store.setValue(item.id, value, payload.unit || item.unit);
-    if (onUpdateCallback) onUpdateCallback(item.id, { ...updated, deviceSource: item.source, deviceStatus: devStatus });
-
-    // Heater safety control always runs. Master/manual state is still exposed
-    // to the dashboard, but it must not allow a heater to remain on at 35 C.
-    if (item.id === "klin_dht_temp") {
-      evaluateKilnTempThreshold();
-    }
-
-    // Kiln temperature tracking: whenever klin_dht_temp or klin_heater changes,
-    // update the baseline/live tracking and broadcast the full kiln temp object.
-    if (item.id === "klin_dht_temp" || item.id === "klin_heater") {
-      const currentTemp = store.get("klin_dht_temp")?.value ?? null;
-      const heaterState = store.get("klin_heater")?.value ?? "off";
-      const kilnTempData = store.updateKilnTemperature({ currentTemp, heaterState });
-      if (onUpdateCallback) {
-        onUpdateCallback("klin_temp_monitor", {
-          item_id: "klin_temp_monitor",
-          value: kilnTempData,
-          unit: "C",
-          ts: Date.now(),
-        });
-      }
-    }
+    handleIncoming(topic, payload);
   });
+}
+
+function handleIncoming(topic, payload) {
+  if (topic === topicStatus("esp1")) {
+    handleEsp1Status(payload);
+    return;
+  }
+
+  if (topic === topicStatus("esp2")) {
+    const devStatus = store.setDeviceStatus("esp2", payload.value);
+    const updated = store.setValue("esp2_status", payload.value, "");
+    if (onUpdateCallback) onUpdateCallback("esp2_status", { ...updated, deviceStatus: devStatus });
+    return;
+  }
+
+  if (topic === topicOverrideStatus()) {
+    if (payload.type === "overrides" && payload.values) {
+      for (const [actuatorId, flag] of Object.entries(payload.values)) {
+        const updated = store.setValue(`${actuatorId}_manual_override`, flag, "");
+        if (onUpdateCallback) onUpdateCallback(`${actuatorId}_manual_override`, updated);
+      }
+    } else {
+      // Backwards compatibility for single overrides
+      const actuatorId = payload.actuator;
+      if (actuatorId) {
+        const flag = payload.manual_override === true || payload.value === true;
+        const updated = store.setValue(`${actuatorId}_manual_override`, flag, "");
+        if (onUpdateCallback) onUpdateCallback(`${actuatorId}_manual_override`, updated);
+      }
+    }
+    return;
+  }
+
+  if (topic === `${PREFIX}/esp1/version` || topic === `${PREFIX}/esp2/version`) {
+    const dev = topic.includes("esp1") ? "esp1" : "esp2";
+    const otaData = store.setOtaStatus(dev, { version: payload.version, title: payload.title });
+    if (onUpdateCallback) onUpdateCallback("ota_status", { device: dev, ...otaData });
+    return;
+  }
+
+  if (topic === `${PREFIX}/esp1/ota/status` || topic === `${PREFIX}/esp2/ota/status`) {
+    const dev = topic.includes("esp1") ? "esp1" : "esp2";
+    const otaData = store.setOtaStatus(dev, payload);
+    if (onUpdateCallback) onUpdateCallback("ota_status", { device: dev, ...otaData });
+    return;
+  }
+
+  if (topic === "v1/devices/me/telemetry") {
+    if (payload.current_fw_title && payload.current_fw_version) {
+      const dev = payload.current_fw_title.includes("esp1") ? "esp1" : "esp2";
+      const thingsboardService = require("../services/thingsboardService");
+      thingsboardService.sendTelemetry(dev, payload);
+      const otaData = store.setOtaStatus(dev, {
+        version: payload.current_fw_version,
+        status: payload.fw_state ? payload.fw_state.toLowerCase() : "idle",
+      });
+      if (onUpdateCallback) onUpdateCallback("ota_status", { device: dev, ...otaData });
+    }
+    return;
+  }
+
+  if (
+    topic === topicValues("esp1") ||
+    topic === topicValues("esp2") ||
+    topic === topicActuatorState("esp1") ||
+    topic === topicActuatorState("esp2")
+  ) {
+    applyLivePayload(payload);
+  }
+}
+
+function handleEsp1Status(payload) {
+  if (payload.type === "material" || payload.material) {
+    const ids = payload.material === "all"
+      ? dispensableItems().map((item) => item.id)
+      : [payload.material];
+    ids.forEach((id) => {
+      const item = findItem(id);
+      if (!item) return;
+      const updated = store.setDispenseStatus(item.id, payload.status);
+      const devStatus = store.setDeviceStatus("esp1", "online");
+      if (onUpdateCallback) {
+        onUpdateCallback(item.id, { ...updated, deviceSource: "esp1", deviceStatus: devStatus });
+      }
+    });
+    return;
+  }
+
+  const devStatus = store.setDeviceStatus("esp1", payload.value);
+  const updated = store.setValue("esp1_status", payload.value, "");
+  if (onUpdateCallback) onUpdateCallback("esp1_status", { ...updated, deviceStatus: devStatus });
+}
+
+function applyLivePayload(payload) {
+  // --- Handlers for unified payloads ---
+  if (payload.type === "actuators" && payload.values) {
+    const devSource = payload.values.lime_stone !== undefined ? "esp1" : "esp2";
+    const devStatus = store.setDeviceStatus(devSource, "online");
+    for (const [actuatorId, val] of Object.entries(payload.values)) {
+      const item = findItem(actuatorId);
+      if (!item) continue;
+      
+      let finalVal = val;
+      if (ACTUATOR_LOGIC_INVERTED && item.type === "actuator") {
+        finalVal = invertOnOff(finalVal);
+      }
+      const updated = store.setValue(item.id, finalVal, payload.unit || item.unit);
+      if (onUpdateCallback) onUpdateCallback(item.id, { ...updated, deviceSource: item.source, deviceStatus: devStatus });
+    }
+    return;
+  }
+
+  if (payload.type === "materials" && payload.values) {
+    const devStatus = store.setDeviceStatus("esp1", "online");
+    for (const [matId, val] of Object.entries(payload.values)) {
+      const item = findItem(matId);
+      if (!item) continue;
+      const updated = store.setValue(item.id, val, payload.unit || item.unit);
+      if (onUpdateCallback) onUpdateCallback(item.id, { ...updated, deviceSource: item.source, deviceStatus: devStatus });
+    }
+    return;
+  }
+
+  if (payload.type === "sensors" && payload.values) {
+    const devStatus = store.setDeviceStatus("esp2", "online");
+    for (const [sensorId, val] of Object.entries(payload.values)) {
+      const item = findItem(sensorId);
+      if (!item) continue;
+      const updated = store.setValue(item.id, val, payload.unit || item.unit);
+      if (onUpdateCallback) onUpdateCallback(item.id, { ...updated, deviceSource: item.source, deviceStatus: devStatus });
+      
+      // Keep existing special logic for kiln temperature threshold evaluation
+      if (item.id === "klin_dht_temp") {
+        evaluateKilnTempThreshold();
+      }
+      if (item.id === "klin_dht_temp" || item.id === "klin_heater") {
+        const currentTemp = store.get("klin_dht_temp")?.value ?? null;
+        const heaterState = store.get("klin_heater")?.value ?? "off";
+        const kilnTempData = store.updateKilnTemperature({ currentTemp, heaterState });
+        if (onUpdateCallback) {
+          onUpdateCallback("klin_temp_monitor", {
+            item_id: "klin_temp_monitor",
+            value: kilnTempData,
+            unit: "C",
+            ts: Date.now(),
+          });
+        }
+      }
+    }
+    return;
+  }
+
+  // --- Fallback for old single payloads (backwards compatible) ---
+  const itemId = itemIdFromPayload(payload);
+  const item = findItem(itemId);
+  if (!item) return;
+
+  const devStatus = store.setDeviceStatus(item.source, "online");
+  let value = payloadValue(payload);
+  if (ACTUATOR_LOGIC_INVERTED && item.type === "actuator") {
+    value = invertOnOff(value);
+  }
+  const updated = store.setValue(item.id, value, payload.unit || item.unit);
+  if (onUpdateCallback) onUpdateCallback(item.id, { ...updated, deviceSource: item.source, deviceStatus: devStatus });
+
+  if (item.id === "klin_dht_temp") {
+    evaluateKilnTempThreshold();
+  }
+  if (item.id === "klin_dht_temp" || item.id === "klin_heater") {
+    const currentTemp = store.get("klin_dht_temp")?.value ?? null;
+    const heaterState = store.get("klin_heater")?.value ?? "off";
+    const kilnTempData = store.updateKilnTemperature({ currentTemp, heaterState });
+    if (onUpdateCallback) {
+      onUpdateCallback("klin_temp_monitor", {
+        item_id: "klin_temp_monitor",
+        value: kilnTempData,
+        unit: "C",
+        ts: Date.now(),
+      });
+    }
+  }
 }
 
 function evaluateKilnTempThreshold() {
@@ -201,15 +275,13 @@ function evaluateKilnTempThreshold() {
   if (rawTemp === null || rawTemp === undefined || isNaN(rawTemp)) return;
 
   const isBelowSetpoint = Number(rawTemp) < 35;
-  
-  // Only control heater & blower if manual override for heater is not active
+
   const heaterOverride = store.get("klin_heater_manual_override")?.value === true;
   if (!heaterOverride) {
     setAutomaticState("klin_heater", isBelowSetpoint ? "on" : "off");
     setAutomaticState("heat_blower", isBelowSetpoint ? "on" : "off");
   }
 
-  // Only control kiln motor if manual override for kiln is not active
   const klinOverride = store.get("klin_manual_override")?.value === true;
   if (!klinOverride) {
     setAutomaticState("klin", isBelowSetpoint ? "off" : "on");
@@ -229,7 +301,12 @@ function sendDirectCommand(item_id, command, automatic = false) {
   if (!item || !client || !client.connected) return false;
   const wireCommand = ACTUATOR_LOGIC_INVERTED ? invertOnOff(command) : command;
   try {
-    client.publish(topicCmd(item), JSON.stringify({ command: wireCommand, ...(automatic ? { mode: "auto" } : {}) }));
+    client.publish(topicActuatorCommand(item.source), JSON.stringify({
+      type: "actuator",
+      actuator: item.id,
+      command: wireCommand,
+      ...(automatic ? { mode: "auto" } : {}),
+    }));
     return true;
   } catch (e) {
     console.error(`[MQTT] sendDirectCommand: failed for ${item_id}:`, e.message || e);
@@ -241,12 +318,10 @@ function isConnected() {
   return !!client && client.connected;
 }
 
-// Used by the actuator ON/OFF routes - triggers Priority 2 (Manual Control)
 function publishCommand(item_id, command) {
   const item = findItem(item_id);
   if (!item) return false;
 
-  // Set Priority 2 (Manual Override) for kiln motor / kiln heater when manually triggered
   if (item_id === "klin" || item_id === "klin_heater") {
     const upOverride = store.setValue(`${item_id}_manual_override`, true, "");
     if (onUpdateCallback) onUpdateCallback(`${item_id}_manual_override`, upOverride);
@@ -258,7 +333,11 @@ function publishCommand(item_id, command) {
   }
   const wireCommand = ACTUATOR_LOGIC_INVERTED ? invertOnOff(command) : command;
   try {
-    client.publish(topicCmd(item), JSON.stringify({ command: wireCommand }));
+    client.publish(topicActuatorCommand(item.source), JSON.stringify({
+      type: "actuator",
+      actuator: item.id,
+      command: wireCommand,
+    }));
     return true;
   } catch (e) {
     console.error(`[MQTT] publishCommand: failed to publish for ${item_id}:`, e.message || e);
@@ -266,11 +345,9 @@ function publishCommand(item_id, command) {
   }
 }
 
-// Used to resume automatic PID/Threshold control for klin / klin_heater
 function publishResumeAuto(item_id) {
   if (item_id !== "klin" && item_id !== "klin_heater") return false;
 
-  // Clear Master Switch override & manual override for klin and heater
   store.setMasterOverrideActive(false);
   const upKlin = store.setValue("klin_manual_override", false, "");
   const upHeater = store.setValue("klin_heater_manual_override", false, "");
@@ -280,21 +357,22 @@ function publishResumeAuto(item_id) {
   }
 
   if (client && client.connected) {
-    const topic = `plant/cement-dubai/esp2/${item_id}/override_cmd`;
     try {
-      client.publish(topic, JSON.stringify({ command: "auto" }));
-      console.log(`[MQTT] Published resume auto to ${topic}`);
+      client.publish(topicOverrideCommand(), JSON.stringify({
+        type: "override",
+        actuator: item_id,
+        command: "auto",
+      }));
+      console.log(`[MQTT] Published resume auto for ${item_id}`);
     } catch (e) {
       console.error(`[MQTT] publishResumeAuto: failed to publish for ${item_id}:`, e.message || e);
     }
   }
 
-  // Immediately evaluate temperature threshold logic upon resuming auto mode
   evaluateKilnTempThreshold();
   return true;
 }
 
-// Used by the material target routes to start a dispense cycle
 function publishTarget(item_id, target) {
   const item = findItem(item_id);
   if (!item || !item.dispensable || typeof target !== "number" || !Number.isFinite(target) || target < 0) {
@@ -305,7 +383,12 @@ function publishTarget(item_id, target) {
     return false;
   }
   try {
-    client.publish(topicTargetCmd(item), JSON.stringify({ target }));
+    client.publish(topicCommand("esp1"), JSON.stringify({
+      type: "material",
+      material: item.id,
+      action: "target",
+      target,
+    }));
     return true;
   } catch (e) {
     console.error(`[MQTT] publishTarget: failed to publish for ${item_id}:`, e.message || e);
@@ -313,11 +396,9 @@ function publishTarget(item_id, target) {
   }
 }
 
-// Used by the Master Switch route to control all actuators at once - triggers Priority 1
 function publishMasterCommand(command) {
   if (command !== "on" && command !== "off") return { count: 0, success: false };
 
-  // Set Priority 1 (Master Switch Override)
   store.setMasterOverrideActive(true);
   const upKlin = store.setValue("klin_manual_override", true, "");
   const upHeater = store.setValue("klin_heater_manual_override", true, "");
@@ -333,13 +414,16 @@ function publishMasterCommand(command) {
     const wireCommand = ACTUATOR_LOGIC_INVERTED ? invertOnOff(command) : command;
     if (client && client.connected) {
       try {
-        client.publish(topicCmd(item), JSON.stringify({ command: wireCommand }));
+        client.publish(topicActuatorCommand(item.source), JSON.stringify({
+          type: "actuator",
+          actuator: item.id,
+          command: wireCommand,
+        }));
         publishedCount++;
       } catch (e) {
         console.error(`[MQTT] publishMasterCommand failed for ${item.id}:`, e.message || e);
       }
     }
-    // Update local state and trigger WebSocket broadcast for immediate UI response
     const updated = store.setValue(item.id, command, "on/off");
     if (onUpdateCallback) {
       onUpdateCallback(item.id, { ...updated, deviceSource: item.source });
@@ -350,42 +434,33 @@ function publishMasterCommand(command) {
   return { count: publishedCount, total: actuators.length, success: publishedCount > 0 };
 }
 
-function publishOtaCommand(target, firmwareTitle, firmwareVersion) {
+function publishOtaCommand(target, firmwareTitle, firmwareVersion, extra = {}) {
   if (!client || !client.connected) {
     console.warn("[MQTT] publishOtaCommand: MQTT client not connected!");
     return false;
   }
   const host = env.THINGSBOARD_URL ? env.THINGSBOARD_URL.replace(/\/$/, "") : `http://${env.MQTT_HOST || "localhost"}:8080`;
   try {
-    if (target === "esp1" || target === "all") {
-      const title = (target === "all") ? "esp1_materials" : (firmwareTitle || "esp1_materials");
-      const ver = firmwareVersion || "1.0.1";
-      const token = env.MQTT_USER || "esp1";
-      const fwUrl = `${host}/api/v1/${token}/firmware?title=${encodeURIComponent(title)}&version=${encodeURIComponent(ver)}`;
-      const payload = JSON.stringify({
+    const publishDeviceOta = (device, title, ver, token) => {
+      const fwUrl = extra.url || `${host}/api/v1/${token}/firmware?title=${encodeURIComponent(title)}&version=${encodeURIComponent(ver)}`;
+      const checksum = extra.checksum || "";
+      const cmdPayload = JSON.stringify({ url: fwUrl, checksum, version: ver });
+      client.publish(`${PREFIX}/${device}/ota/cmd`, cmdPayload);
+      client.publish("v1/devices/me/attributes", JSON.stringify({
         fw_title: title,
         fw_version: ver,
         fw_url: fwUrl,
+        fw_checksum: checksum,
         target_fw_title: title,
-        target_fw_version: ver
-      });
-      client.publish("v1/devices/me/attributes", payload);
-      store.setOtaStatus("esp1", { status: "INITIATED", progress: 0, message: "ThingsBoard OTA package assigned", title, targetVersion: ver });
+        target_fw_version: ver,
+      }));
+      store.setOtaStatus(device, { status: "INITIATED", progress: 0, message: "OTA command published to device", title, targetVersion: ver });
+    };
+    if (target === "esp1" || target === "all") {
+      publishDeviceOta("esp1", firmwareTitle || "esp1_materials", firmwareVersion || "1.0.1", env.ESP1_ACCESS_TOKEN || "esp1");
     }
     if (target === "esp2" || target === "all") {
-      const title = (target === "all") ? "esp2_relay" : (firmwareTitle || "esp2_relay");
-      const ver = firmwareVersion || "1.0.1";
-      const token = env.MQTT_USER || "esp2";
-      const fwUrl = `${host}/api/v1/${token}/firmware?title=${encodeURIComponent(title)}&version=${encodeURIComponent(ver)}`;
-      const payload = JSON.stringify({
-        fw_title: title,
-        fw_version: ver,
-        fw_url: fwUrl,
-        target_fw_title: title,
-        target_fw_version: ver
-      });
-      client.publish("v1/devices/me/attributes", payload);
-      store.setOtaStatus("esp2", { status: "INITIATED", progress: 0, message: "ThingsBoard OTA package assigned", title, targetVersion: ver });
+      publishDeviceOta("esp2", firmwareTitle || "esp2_relay", firmwareVersion || "1.0.1", env.ESP2_ACCESS_TOKEN || "esp2");
     }
     if (onUpdateCallback) {
       onUpdateCallback("ota_status", { device: target, all: store.allOtaStatus() });
@@ -405,13 +480,13 @@ function publishRebootCommand(target) {
   const payload = JSON.stringify({ command: "reboot" });
   try {
     if (target === "esp1" || target === "all") {
-      client.publish("plant/cement-dubai/esp1/cmd/reboot", payload);
+      client.publish(`${PREFIX}/esp1/cmd/reboot`, payload);
       client.publish("v1/devices/me/rpc/request/1", JSON.stringify({ method: "reboot", params: {} }));
       store.setDeviceStatus("esp1", "rebooting");
       store.setOtaStatus("esp1", { status: "rebooting", message: "Reboot triggered" });
     }
     if (target === "esp2" || target === "all") {
-      client.publish("plant/cement-dubai/esp2/cmd/reboot", payload);
+      client.publish(`${PREFIX}/esp2/cmd/reboot`, payload);
       client.publish("v1/devices/me/rpc/request/2", JSON.stringify({ method: "reboot", params: {} }));
       store.setDeviceStatus("esp2", "rebooting");
       store.setOtaStatus("esp2", { status: "rebooting", message: "Reboot triggered" });
@@ -428,5 +503,5 @@ function publishRebootCommand(target) {
 
 module.exports = {
   connect, isConnected, publishCommand, publishMasterCommand,
-  publishResumeAuto, publishTarget, publishOtaCommand, publishRebootCommand
+  publishResumeAuto, publishTarget, publishOtaCommand, publishRebootCommand,
 };

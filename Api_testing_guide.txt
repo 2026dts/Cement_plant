@@ -27,19 +27,18 @@ Before touching the backend at all, watch the raw MQTT traffic.
 # Everything from both boards
 mosquitto_sub -h 192.168.0.2 -t 'plant/cement-dubai/#' -v
 
-# Just one item while you debug it
-mosquitto_sub -h 192.168.0.2 -t 'plant/cement-dubai/esp2/klin_dht_temp' -v
+# Live sensors (identity is in the payload "sensor" field)
+mosquitto_sub -h 192.168.0.2 -t 'plant/cement-dubai/esp2/values' -v
 ```
 
 **Pass criteria:**
 - `plant/cement-dubai/esp1/status` and `plant/cement-dubai/esp2/status` show `{"value":"online"}` retained.
-- Every material/sensor topic updates on its expected interval (150ms for
-  esp1 telemetry, 2s for esp2 DHT/vibration).
+- `esp1/values` and `esp2/values` update on their expected intervals (ESP1 telemetry, 2s for ESP2 DHT/vibration).
 - Firing a manual command round-trips:
   ```bash
-  mosquitto_pub -h 192.168.0.2 -t 'plant/cement-dubai/esp2/crusher/cmd' -m '{"command":"on"}'
+  mosquitto_pub -h 192.168.0.2 -t 'plant/cement-dubai/esp2/actuator/command' -m '{"type":"actuator","actuator":"crusher","command":"on"}'
   ```
-  then confirm `plant/cement-dubai/esp2/crusher` publishes back `{"value":"on"}`.
+  then confirm `plant/cement-dubai/esp2/actuator/state` publishes back `{"type":"actuator","actuator":"crusher","value":"on"}`.
 
 If this layer is broken, no amount of backend/Cupola debugging will fix it —
 fix wiring/firmware/broker first.
@@ -66,11 +65,11 @@ Run this checklist top to bottom. Each has a pass/fail you can eyeball.
 | 1 | `curl http://localhost:4000/api/items` | JSON object, one key per registry item, no `undefined`/`null` values after boards have been up >5s |
 | 2 | `curl http://localhost:4000/api/item/iron_ore` | `{"item_id":"iron_ore","value":...,"unit":"g","ts":...}` |
 | 3 | `curl http://localhost:4000/api/item/does_not_exist` | HTTP 404 |
-| 4 | `curl http://localhost:4000/api/item/crusher/action/on` | `text/plain` body `CRUSHER: ON`, relay physically clicks, `plant/cement-dubai/esp2/crusher` MQTT updates to `on` |
+| 4 | `curl http://localhost:4000/api/item/crusher/action/on` | `text/plain` body `CRUSHER: ON`, relay physically clicks, `plant/cement-dubai/esp2/actuator/state` MQTT updates crusher to `on` |
 | 5 | `curl http://localhost:4000/api/item/crusher/action/off` | Same, `OFF` |
 | 6 | `curl http://localhost:4000/api/item/iron_ore/action/on` | HTTP 400 — `iron_ore` isn't an actuator |
 | 7 | `curl -X POST http://localhost:4000/api/item/crusher/action -H "Content-Type: application/json" -d '{"command":"on"}'` | HTTP 200, same effect as #4 |
-| 8 | `curl -X POST http://localhost:4000/api/materials/targets -H "Content-Type: application/json" -d '{"gypsum":50}'` | `{"accepted":["gypsum"],"rejected":[]}`, servo moves, MQTT `target/status` goes `dispensing` then `done` |
+| 8 | `curl -X POST http://localhost:4000/api/materials/targets -H "Content-Type: application/json" -d '{"gypsum":50}'` | `{"accepted":["gypsum"],"rejected":[]}`, servo moves, MQTT `esp1/status` goes `dispensing` then `done` |
 | 9 | `curl -X POST http://localhost:4000/api/materials/targets -H "Content-Type: application/json" -d '{"crusher":50}'` | `crusher` lands in `rejected` (not dispensable) |
 | 10 | `curl http://localhost:4000/api/materials/dispensable` | Array of the 5 material ids |
 

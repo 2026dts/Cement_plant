@@ -7,25 +7,22 @@ All plant MQTT topics use this location prefix:
 
 plant/cement-dubai/
 
-Topic Pattern
--------------
-ESP1 value/state topic:
-plant/cement-dubai/esp1/<item_id>
+Architecture
+------------
+Identity lives in the JSON payload, not in the topic.
 
-ESP1 command topic:
-plant/cement-dubai/esp1/<item_id>/cmd
+Common application topics per board:
+  command            incoming material commands (ESP1)
+  values             live material / sensor readings
+  status             device LWT, plus ESP1 dispense status (payload.type = material)
+  actuator/command   incoming actuator commands
+  actuator/state     outgoing actuator states
 
-ESP1 target command topic:
-plant/cement-dubai/esp1/<item_id>/target/cmd
+ESP2 also uses:
+  override/command   resume auto / PID
+  override/status    klin / klin_heater manual-override flag
 
-ESP1 target status topic:
-plant/cement-dubai/esp1/<item_id>/target/status
-
-ESP2 value/state topic:
-plant/cement-dubai/esp2/<item_id>
-
-ESP2 command topic:
-plant/cement-dubai/esp2/<item_id>/cmd
+OTA, reboot, version, and ThingsBoard topics stay device-level.
 
 
 BROKER CONNECTIONS
@@ -57,220 +54,161 @@ Only the broker connection is different.
 Upload only one firmware variant to each ESP32 board.
 
 
-ESP1 MATERIALS
-==============
+ESP1 COMMON TOPICS
+==================
 
-Live Material Topics
---------------------
-Gypsum:
-plant/cement-dubai/esp1/gypsum
+Command (backend -> ESP1):
+plant/cement-dubai/esp1/command
 
-Clay:
-plant/cement-dubai/esp1/clay
+Payload:
+{"type":"material","material":"gypsum","action":"target","target":50}
 
-Iron Ore:
-plant/cement-dubai/esp1/iron_ore
+material is one of: gypsum, clay, iron_ore, sand
 
-Sand:
-plant/cement-dubai/esp1/sand
+Live values (ESP1 -> backend):
+plant/cement-dubai/esp1/values
 
-Material Target Command Topics
-------------------------------
-Gypsum:
-plant/cement-dubai/esp1/gypsum/target/cmd
+Payload (Consolidated Materials):
+{
+  "type": "materials",
+  "values": {
+    "gypsum": 6.04,
+    "clay": 0.0,
+    "iron_ore": 0.0,
+    "sand": 4.26
+  },
+  "unit": "g"
+}
 
-Clay:
-plant/cement-dubai/esp1/clay/target/cmd
-
-Iron Ore:
-plant/cement-dubai/esp1/iron_ore/target/cmd
-
-Sand:
-plant/cement-dubai/esp1/sand/target/cmd
-
-Material Target Status Topics
------------------------------
-Gypsum:
-plant/cement-dubai/esp1/gypsum/target/status
-
-Clay:
-plant/cement-dubai/esp1/clay/target/status
-
-Iron Ore:
-plant/cement-dubai/esp1/iron_ore/target/status
-
-Sand:
-plant/cement-dubai/esp1/sand/target/status
-
-Target command payload:
-{"target":50}
-
-Target status payloads:
-{"status":"dispensing"}
-{"status":"done"}
-
-
-ESP1 ACTUATOR
-=============
-
-Lime Stone Gate
----------------
-State topic:
-plant/cement-dubai/esp1/lime_stone
-
-Command topic:
-plant/cement-dubai/esp1/lime_stone/cmd
-
-Open payload:
-{"command":"open"}
-
-Close payload:
-{"command":"close"}
-
-
-ESP2 ACTUATORS
-==============
-
-Actuator Topic Rule
--------------------
-For every ESP2 actuator:
-
-Command topic:
-plant/cement-dubai/esp2/<actuator_id>/cmd
-
-State topic:
-plant/cement-dubai/esp2/<actuator_id>
-
-Command payloads:
-{"command":"on"}
-{"command":"off"}
-
-Actuator List
--------------
-Crusher:
-plant/cement-dubai/esp2/crusher/cmd
-
-Conveyor 1:
-plant/cement-dubai/esp2/conveyor_1/cmd
-
-Conveyor 2:
-plant/cement-dubai/esp2/conveyor_2/cmd
-
-Conveyor 3:
-plant/cement-dubai/esp2/conveyor_3/cmd
-
-Conveyor 4:
-plant/cement-dubai/esp2/conveyor_4/cmd
-
-Klin motor:
-plant/cement-dubai/esp2/klin/cmd
-
-Klin heater:
-plant/cement-dubai/esp2/klin_heater/cmd
-
-Heat blower:
-plant/cement-dubai/esp2/heat_blower/cmd
-
-Preheating tower fan:
-plant/cement-dubai/esp2/preheating_tower_fan/cmd
-
-Preheating tower heater:
-plant/cement-dubai/esp2/preheating_tower_heater/cmd
-
-Vibration motor:
-plant/cement-dubai/esp2/vibration_motor/cmd
-
-Ball mill 1:
-plant/cement-dubai/esp2/ball_mill_1/cmd
-
-Ball mill 2:
-plant/cement-dubai/esp2/ball_mill_2/cmd
-
-
-ESP2 SENSORS
-============
-
-Klin DHT Temperature:
-plant/cement-dubai/esp2/klin_dht_temp
-Unit: C
-
-Klin DHT Humidity:
-plant/cement-dubai/esp2/klin_dht_humidity
-Unit: %
-
-Cooler DHT Temperature:
-plant/cement-dubai/esp2/cooler_dht_temp
-Unit: C
-
-Cooler DHT Humidity:
-plant/cement-dubai/esp2/cooler_dht_humidity
-Unit: %
-
-Preheating Tower DHT Temperature:
-plant/cement-dubai/esp2/preheating_tower_dht_temp
-Unit: C
-
-Preheating Tower DHT Humidity:
-plant/cement-dubai/esp2/preheating_tower_dht_humidity
-Unit: %
-
-Vibration Sensor:
-plant/cement-dubai/esp2/vibration_sensor
-Unit: g
-
-Sensor payload example:
-{"value":34.0,"unit":"C"}
-
-
-DEVICE STATUS TOPICS
-====================
-
-ESP1 status:
+Status (ESP1 -> backend):
 plant/cement-dubai/esp1/status
 
-ESP2 status:
-plant/cement-dubai/esp2/status
-
-Status payloads:
+Device LWT / connect:
 {"value":"online"}
 {"value":"offline"}
+{"value":"rebooting"}
 
-Firmware version topics:
+Dispense status (same topic, distinguished by type):
+{"type":"material","material":"gypsum","target":55.0,"status":"dispensing"}
+{"type":"material","material":"gypsum","target":55.0,"status":"done"}
+
+Lime stone gate command (backend -> ESP1):
+plant/cement-dubai/esp1/actuator/command
+
+{"type":"actuator","actuator":"lime_stone","command":"open"}
+{"type":"actuator","actuator":"lime_stone","command":"close"}
+
+Lime stone gate state (ESP1 -> backend):
+plant/cement-dubai/esp1/actuator/state
+
+Payload (Consolidated Actuators):
+{
+  "type": "actuators",
+  "values": {
+    "lime_stone": "open"
+  }
+}
+
+
+ESP2 COMMON TOPICS
+==================
+
+Live sensors (ESP2 -> backend):
+plant/cement-dubai/esp2/values
+
+Payload (Consolidated Sensors):
+{
+  "type": "sensors",
+  "values": {
+    "klin_dht_temp": 34.0,
+    "klin_dht_humidity": 60.5,
+    "cooler_dht_temp": 28.2,
+    "cooler_dht_humidity": 55.1,
+    "preheating_tower_dht_temp": 45.3,
+    "preheating_tower_dht_humidity": 40.2,
+    "vibration_sensor": 0.05
+  }
+}
+
+Actuator command (backend -> ESP2):
+plant/cement-dubai/esp2/actuator/command
+
+{"type":"actuator","actuator":"crusher","command":"on"}
+{"type":"actuator","actuator":"crusher","command":"off"}
+{"type":"actuator","actuator":"klin_heater","command":"on","mode":"auto"}
+
+actuator is one of:
+crusher, conveyor_1, conveyor_2, conveyor_3, conveyor_4,
+klin, klin_heater, heat_blower,
+preheating_tower_fan, preheating_tower_heater,
+vibration_motor, ball_mill_1, ball_mill_2
+
+Actuator state (ESP2 -> backend):
+plant/cement-dubai/esp2/actuator/state
+
+Payload (Consolidated Actuators):
+{
+  "type": "actuators",
+  "values": {
+    "crusher": "off",
+    "conveyor_1": "off",
+    "conveyor_2": "off",
+    "conveyor_3": "off",
+    "conveyor_4": "off",
+    "klin": "off",
+    "klin_heater": "off",
+    "heat_blower": "off",
+    "preheating_tower_fan": "off",
+    "preheating_tower_heater": "off",
+    "vibration_motor": "off",
+    "ball_mill_1": "off",
+    "ball_mill_2": "off"
+  }
+}
+
+Device status:
+plant/cement-dubai/esp2/status
+{"value":"online"}
+{"value":"offline"}
+{"value":"rebooting"}
+
+Override resume (backend -> ESP2):
+plant/cement-dubai/esp2/override/command
+{"type":"override","actuator":"klin","command":"auto"}
+{"type":"override","actuator":"klin_heater","command":"auto"}
+
+Override status (ESP2 -> backend):
+plant/cement-dubai/esp2/override/status
+
+Payload (Consolidated Overrides):
+{
+  "type": "overrides",
+  "values": {
+    "klin": false,
+    "klin_heater": false
+  }
+}
+
+
+DEVICE / OTA / REBOOT (UNCHANGED)
+=================================
+
+ESP1 status LWT is listed above.
+Firmware version:
 plant/cement-dubai/esp1/version
 plant/cement-dubai/esp2/version
 
-OTA status topics:
+OTA status:
 plant/cement-dubai/esp1/ota/status
 plant/cement-dubai/esp2/ota/status
 
-
-KLIN OVERRIDE TOPICS
-====================
-
-Klin manual override status:
-plant/cement-dubai/esp2/klin/manual_override
-
-Klin heater manual override status:
-plant/cement-dubai/esp2/klin_heater/manual_override
-
-Resume auto command:
-plant/cement-dubai/esp2/klin/override_cmd
-plant/cement-dubai/esp2/klin_heater/override_cmd
-
-Resume auto payload:
-{"command":"auto"}
-
-
-SYSTEM COMMAND TOPICS
-=====================
-
-ESP1 reboot command:
+ESP1 reboot:
 plant/cement-dubai/esp1/cmd/reboot
 
-ESP2 reboot command:
+ESP2 reboot:
 plant/cement-dubai/esp2/cmd/reboot
 
-All-device reboot command:
+All-device reboot:
 plant/cement-dubai/cmd/reboot/all
 
 ESP1 OTA command:
@@ -279,24 +217,24 @@ plant/cement-dubai/esp1/ota/cmd
 ESP2 OTA command:
 plant/cement-dubai/esp2/ota/cmd
 
-All-device OTA command:
+All-device OTA:
 plant/cement-dubai/ota/cmd/all
 
 
-MQTT SUBSCRIBE EXAMPLES
-=======================
+MQTT EXAMPLES
+=============
 
 Subscribe to all location topics:
 mosquitto_sub -h 192.168.0.3 -p 1883 -t "plant/cement-dubai/#" -v
 
-Subscribe to Klin temperature:
-mosquitto_sub -h 192.168.0.3 -p 1883 -t "plant/cement-dubai/esp2/klin_dht_temp" -v
+Subscribe to ESP2 sensors:
+mosquitto_sub -h 192.168.0.3 -p 1883 -t "plant/cement-dubai/esp2/values" -v
 
-Publish Klin heater ON:
-mosquitto_pub -h 192.168.0.3 -p 1883 -t "plant/cement-dubai/esp2/klin_heater/cmd" -m "{\"command\":\"on\"}"
+Publish crusher ON:
+mosquitto_pub -h 192.168.0.3 -p 1883 -t "plant/cement-dubai/esp2/actuator/command" -m "{\"type\":\"actuator\",\"actuator\":\"crusher\",\"command\":\"on\"}"
 
-Publish Klin heater OFF:
-mosquitto_pub -h 192.168.0.3 -p 1883 -t "plant/cement-dubai/esp2/klin_heater/cmd" -m "{\"command\":\"off\"}"
+Publish klin heater OFF:
+mosquitto_pub -h 192.168.0.3 -p 1883 -t "plant/cement-dubai/esp2/actuator/command" -m "{\"type\":\"actuator\",\"actuator\":\"klin_heater\",\"command\":\"off\"}"
 
-Publish Gypsum target:
-mosquitto_pub -h 192.168.0.3 -p 1883 -t "plant/cement-dubai/esp1/gypsum/target/cmd" -m "{\"target\":50}"
+Publish gypsum target:
+mosquitto_pub -h 192.168.0.3 -p 1883 -t "plant/cement-dubai/esp1/command" -m "{\"type\":\"material\",\"material\":\"gypsum\",\"action\":\"target\",\"target\":50}"

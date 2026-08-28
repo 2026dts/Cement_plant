@@ -32,13 +32,13 @@
     Pair 4 - sand:          DOUT -> GPIO15  | Servo -> GPIO13
     Lime stone gate:                           Servo -> GPIO25
 
-  MQTT topics (per material, e.g. "gypsum"):
-    plant/cement-dubai/esp1/gypsum        -> published live weight  { "value": 23.4, "unit": "g" }
-    plant/cement-dubai/esp1/gypsum/target/cmd -> subscribed target  { "target": 50 }
-    plant/cement-dubai/esp1/gypsum/target/status -> published status { "status": "dispensing" | "done" }
-    plant/cement-dubai/esp1/status        -> published device status { "value": "online" | "offline" }
-    plant/cement-dubai/esp1/lime_stone    -> published gate state { "value": "open" | "close" }
-    plant/cement-dubai/esp1/lime_stone/cmd -> subscribed gate command { "command": "open" | "close" }
+  MQTT topics (common, identity in payload):
+    plant/cement-dubai/esp1/command           -> SUB material cmd { "material","action","target" }
+    plant/cement-dubai/esp1/values            -> PUB live weight  { "type":"material","material","value","unit" }
+    plant/cement-dubai/esp1/status            -> PUB device LWT   { "value":"online"|"offline"|"rebooting" }
+                                              -> PUB dispense     { "type":"material","material","target","status" }
+    plant/cement-dubai/esp1/actuator/command  -> SUB gate cmd     { "actuator":"lime_stone","command":"open"|"close" }
+    plant/cement-dubai/esp1/actuator/state    -> PUB gate state   { "actuator":"lime_stone","value":"open"|"close" }
 
   ============================= BOOT / TARE BEHAVIOUR =========================
   At boot, each channel's HX711 is brought up with a bounded timeout instead
@@ -83,6 +83,8 @@ constexpr uint16_t MQTT_BROKER_PORT = 1883U;
 constexpr char MQTT_USER[]     = "esp1";              // ThingsBoard Access Token for ESP1
 constexpr char MQTT_PASSWORD[] = "";
 constexpr char MQTT_CLIENT_ID[] = "esp1-materials";
+constexpr char TB_HTTP_BASE[]     = "http://allcad-chennai.selfip.com:8081";
+constexpr char TB_DEVICE_TOKEN[]  = "esp1";
 
 constexpr uint32_t TELEMETRY_INTERVAL_MS   = 500UL;   // live weight publish interval
 constexpr uint32_t MQTT_RECONNECT_DELAY_MS = 2000UL;
@@ -140,11 +142,11 @@ PubSubClient mqtt(espClient);
 unsigned long lastTelemetryMs        = 0;
 unsigned long lastReconnectAttemptMs = 0;
 
-String topicValue(const char *item_id)        { return String("plant/cement-dubai/esp1/") + item_id; }
-String topicTargetCmd(const char *item_id)    { return String("plant/cement-dubai/esp1/") + item_id + "/target/cmd"; }
-String topicTargetStatus(const char *item_id) { return String("plant/cement-dubai/esp1/") + item_id + "/target/status"; }
-String limeStoneGateStateTopic()              { return "plant/cement-dubai/esp1/lime_stone"; }
-String limeStoneGateCmdTopic()                { return "plant/cement-dubai/esp1/lime_stone/cmd"; }
+String commandTopic()                         { return "plant/cement-dubai/esp1/command"; }
+String valuesTopic()                           { return "plant/cement-dubai/esp1/values"; }
+String statusTopic()                           { return "plant/cement-dubai/esp1/status"; }
+String actuatorCommandTopic()                  { return "plant/cement-dubai/esp1/actuator/command"; }
+String actuatorStateTopic()                    { return "plant/cement-dubai/esp1/actuator/state"; }
 
 // ============================================================================
 // --------------------------------- WIFI -------------------------------------
@@ -210,25 +212,44 @@ float readLoadCellFast(MaterialFeed &m, uint8_t samples = 1) {
   return (m.lastWeight < 0.0f) ? 0.0f : m.lastWeight;
 }
 
+void publishAllMaterials() {
+  StaticJsonDocument<256> doc;
+  doc["type"] = "materials";
+  JsonObject values = doc.createNestedObject("values");
+  for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
+    float w = readLoadCellFast(materials[i], 1);
+    if (w < 0.0f) w = 0.0f;
+    materials[i].lastWeight = w;
+    values[materials[i].item_id] = w;
+  }
+  doc["unit"] = "g";
+  char payload[256];
+  serializeJson(doc, payload);
+  mqtt.publish(valuesTopic().c_str(), payload);
+}
+
 void publishValue(const char *item_id, float value, const char *unit) {
   if (value < 0.0f) {
     value = 0.0f; // Prevent publishing negative sensor values
   }
-  StaticJsonDocument<64> doc;
+  StaticJsonDocument<128> doc;
+  doc["type"] = "material";
+  doc["material"] = item_id;
   doc["value"] = value;
   doc["unit"]  = unit;
-  char payload[64];
+  char payload[192];
   serializeJson(doc, payload);
-  mqtt.publish(topicValue(item_id).c_str(), payload);
+  mqtt.publish(valuesTopic().c_str(), payload);
 }
 
-void publishLimeStoneGateState() {
-  StaticJsonDocument<48> doc;
-  doc["value"] = limeStoneGateOpen ? "open" : "close";
-  doc["unit"] = "open/close";
-  char payload[48];
+void publishAllActuators() {
+  StaticJsonDocument<256> doc;
+  doc["type"] = "actuators";
+  JsonObject values = doc.createNestedObject("values");
+  values["lime_stone"] = limeStoneGateOpen ? "open" : "close";
+  char payload[256];
   serializeJson(doc, payload);
-  mqtt.publish(limeStoneGateStateTopic().c_str(), payload, true);
+  mqtt.publish(actuatorStateTopic().c_str(), payload, true); // retained
 }
 
 void setLimeStoneGate(bool open) {
@@ -237,18 +258,21 @@ void setLimeStoneGate(bool open) {
   Serial.printf("[LIME STONE GATE] %s -> %d degrees\n",
                 open ? "open" : "close",
                 open ? SERVO_MAX_ANGLE : SERVO_HOME_ANGLE);
-  publishLimeStoneGateState();
+  publishAllActuators();
 }
 
 // ============================================================================
 // ----------------------- SERVO / DISPENSING CONTROL --------------------------
 // ============================================================================
 void publishTargetStatus(MaterialFeed &m, const char *status) {
-  StaticJsonDocument<64> doc;
+  StaticJsonDocument<128> doc;
+  doc["type"] = "material";
+  doc["material"] = m.item_id;
+  doc["target"] = m.targetGrams;
   doc["status"] = status;
-  char payload[64];
+  char payload[192];
   serializeJson(doc, payload);
-  mqtt.publish(topicTargetStatus(m.item_id).c_str(), payload);
+  mqtt.publish(statusTopic().c_str(), payload);
 }
 
 void startDispense(MaterialFeed &m, float target) {
@@ -275,7 +299,7 @@ void stopDispense(MaterialFeed &m) {
   Serial.printf("\n[DISPENSE STOP] %s: target reached (current=%.1fg, target=%.1fg), servo -> HOME (%d deg)\n",
                 m.item_id, m.lastWeight, m.targetGrams, SERVO_HOME_ANGLE);
   publishTargetStatus(m, "done");
-  publishValue(m.item_id, m.lastWeight, "g");
+  publishAllMaterials();
 }
 
 // Dedicated ULTRA-FAST check for active dispensing feeds.
@@ -286,7 +310,7 @@ void checkDispensingFast() {
     if (m.dispensing) {
       if (m.loadCell.is_ready()) {
         m.lastWeight = readLoadCellFast(m, 1); // 1 sample for instant measurement
-        publishValue(m.item_id, m.lastWeight, "g");
+        publishAllMaterials();
         Serial.printf("[DISPENSING FAST] %s: %.1fg / %.1fg\n", m.item_id, m.targetGrams);
         if (m.lastWeight >= m.targetGrams) {
           stopDispense(m);
@@ -298,13 +322,7 @@ void checkDispensingFast() {
 
 // Background telemetry for idle material feeds
 void readAndPublishTelemetry() {
-  for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
-    MaterialFeed &m = materials[i];
-    if (m.dispensing) continue; // dispensing channels are handled instantly by checkDispensingFast()
-
-    m.lastWeight = readLoadCellFast(m, 1);
-    publishValue(m.item_id, m.lastWeight, "g");
-  }
+  publishAllMaterials();
 }
 
 // Retries any HX711 channel that failed to come up during setup(), without
@@ -380,7 +398,7 @@ void stopActuatorsSafely() {
   for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
     materials[i].dispensing = false;
     materials[i].servo.write(SERVO_HOME_ANGLE);
-    mqtt.publish(topicTargetStatus(materials[i].item_id).c_str(), "{\"status\":\"done\"}");
+    mqtt.publish(statusTopic().c_str(), "{\"type\":\"material\",\"material\":\"all\",\"status\":\"done\"}");
   }
   Serial.println("[SAFETY] ESP1 actuators safely stopped (raw gate closed, servos homed).");
 }
@@ -459,9 +477,9 @@ void performOTA(const char *url = "", const char *checksum = "", const char *new
 // ============================================================================
 // -------------------------------- MQTT CALLBACK ------------------------------
 // ============================================================================
-MaterialFeed *materialForTopic(const String &topic) {
+MaterialFeed *materialForId(const char *materialId) {
   for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
-    if (topic == topicTargetCmd(materials[i].item_id)) return &materials[i];
+    if (strcmp(materialId, materials[i].item_id) == 0) return &materials[i];
   }
   return nullptr;
 }
@@ -523,40 +541,30 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
     }
   }
 
-  if (topicStr == limeStoneGateCmdTopic()) {
-    StaticJsonDocument<64> gateDoc;
-    DeserializationError gateErr = deserializeJson(gateDoc, payload, length);
-    if (gateErr) {
-      Serial.printf("[MQTT] Bad JSON on %s: %s\n", topic, gateErr.c_str());
-      return;
-    }
+  if (topicStr != commandTopic() && topicStr != actuatorCommandTopic()) return;
 
-    const char *command = gateDoc["command"] | "";
-    if (strcmp(command, "open") == 0) {
-      setLimeStoneGate(true);
-    } else if (strcmp(command, "close") == 0) {
-      setLimeStoneGate(false);
-    } else {
-      Serial.printf("[MQTT] Unknown lime stone gate command: \"%s\"\n", command);
-    }
-    return;
-  }
-
-  MaterialFeed *m = materialForTopic(topicStr);
-  if (m == nullptr) return;
-
-  StaticJsonDocument<64> doc;
+  StaticJsonDocument<128> doc;
   DeserializationError err = deserializeJson(doc, payload, length);
   if (err) {
     Serial.printf("[MQTT] Bad JSON on %s: %s\n", topic, err.c_str());
     return;
   }
 
-  float target = doc["target"] | -1.0f;
-  if (target < 0) {
-    Serial.println("[MQTT] target/cmd missing a valid \"target\" field");
+  if (topicStr == actuatorCommandTopic()) {
+    const char *actuatorId = doc["actuator"] | "";
+    const char *command = doc["command"] | "";
+    if (strcmp(actuatorId, "lime_stone") != 0) return;
+    if (strcmp(command, "open") == 0) setLimeStoneGate(true);
+    else if (strcmp(command, "close") == 0) setLimeStoneGate(false);
     return;
   }
+
+  const char *materialId = doc["material"] | "";
+  const char *action = doc["action"] | "target";
+  float target = doc["target"] | -1.0f;
+  if (strcmp(action, "target") != 0 || target < 0) return;
+  MaterialFeed *m = materialForId(materialId);
+  if (m == nullptr) return;
   startDispense(*m, target);
 }
 
@@ -590,7 +598,8 @@ bool mqttConnect() {
   publishFwVersion();
   Serial.println("[MQTT] Published: plant/cement-dubai/esp1/status = online");
 
-  mqtt.subscribe(limeStoneGateCmdTopic().c_str());
+  mqtt.subscribe(commandTopic().c_str());
+  mqtt.subscribe(actuatorCommandTopic().c_str());
   mqtt.subscribe("plant/cement-dubai/esp1/ota/cmd");
   mqtt.subscribe("plant/cement-dubai/ota/cmd/all");
   mqtt.subscribe("plant/cement-dubai/esp1/cmd/reboot");
@@ -599,9 +608,6 @@ bool mqttConnect() {
   mqtt.subscribe("v1/devices/me/attributes/response/+");
   mqtt.subscribe("v1/devices/me/rpc/request/+");
 
-  for (uint8_t i = 0; i < NUM_MATERIALS; i++) {
-    mqtt.subscribe(topicTargetCmd(materials[i].item_id).c_str());
-  }
   return true;
 }
 

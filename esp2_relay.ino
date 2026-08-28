@@ -68,25 +68,13 @@
   power-on, not boot mode - safe for a sensor that's only read after setup()
   runs, but avoid it if you add anything boot-timing-sensitive later.
 
-  MQTT topics:
-    Actuators (per channel, e.g. "conveyor_1"):
-      plant/cement-dubai/esp2/conveyor_1/cmd -> subscribed command { "command": "on" | "off" | "auto" }
-      plant/cement-dubai/esp2/conveyor_1     -> published state     { "value": "on" | "off" }
-    Sensors:
-      plant/cement-dubai/esp2/klin_dht_temp -> { "value": 32.5, "unit": "C" }
-      plant/cement-dubai/esp2/klin_dht_humidity -> { "value": 41, "unit": "%" }
-      plant/cement-dubai/esp2/cooler_dht_temp -> { "value": 30.1, "unit": "C" }
-      plant/cement-dubai/esp2/cooler_dht_humidity -> { "value": 38, "unit": "%" }
-      plant/cement-dubai/esp2/preheating_tower_dht_temp -> { "value": 34.0, "unit": "C" }
-      plant/cement-dubai/esp2/preheating_tower_dht_humidity -> { "value": 36, "unit": "%" }
-      plant/cement-dubai/esp2/vibration_sensor -> { "value": 1, "unit": "/8" }
-    Device / PID status:
-      plant/cement-dubai/esp2/status       -> { "value": "online" | "offline" } (LWT + on-connect)
-      plant/cement-dubai/esp2/klin/manual_override -> { "value": true | false } (retained)
-      plant/cement-dubai/esp2/klin_heater/manual_override -> { "value": true | false } (retained)
-    Override resume (subscribed, sent by backend dashboard):
-      plant/cement-dubai/esp2/klin/override_cmd -> { "command": "auto" }
-      plant/cement-dubai/esp2/klin_heater/override_cmd -> { "command": "auto" }
+  MQTT topics (common, identity in payload):
+    plant/cement-dubai/esp2/actuator/command -> SUB { "actuator","command":"on"|"off","mode"? }
+    plant/cement-dubai/esp2/actuator/state   -> PUB { "type":"actuator","actuator","value":"on"|"off" }
+    plant/cement-dubai/esp2/values           -> PUB { "type":"sensor","sensor","value","unit" }
+    plant/cement-dubai/esp2/status           -> PUB { "value":"online"|"offline"|"rebooting" } (LWT + on-connect)
+    plant/cement-dubai/esp2/override/command -> SUB { "actuator","command":"auto" }
+    plant/cement-dubai/esp2/override/status  -> PUB { "type":"override","actuator","manual_override" }
 */
 
 #include <WiFi.h>
@@ -112,6 +100,8 @@ constexpr uint16_t MQTT_BROKER_PORT = 1883U;
 constexpr char MQTT_USER[]     = "esp2";               // ThingsBoard Access Token for ESP2
 constexpr char MQTT_PASSWORD[] = "";
 constexpr char MQTT_CLIENT_ID[] = "esp2-relay";
+constexpr char TB_HTTP_BASE[]     = "http://allcad-chennai.selfip.com:8081";
+constexpr char TB_DEVICE_TOKEN[]  = "esp2";
 
 constexpr uint32_t MQTT_RECONNECT_DELAY_MS = 2000UL;
 constexpr uint32_t STATE_REPUBLISH_MS      = 10000UL; // periodic relay "still on/off" heartbeat
@@ -190,8 +180,11 @@ unsigned long lastReconnectAttemptMs = 0;
 unsigned long lastStateRepublishMs   = 0;
 unsigned long lastDhtReadMs          = 0; // 2s for PID
 
-String topicState(const char *item_id) { return String("plant/cement-dubai/esp2/") + item_id; }
-String topicCmd(const char *item_id)   { return String("plant/cement-dubai/esp2/") + item_id + "/cmd"; }
+String valuesTopic()                          { return "plant/cement-dubai/esp2/values"; }
+String actuatorCommandTopic()                 { return "plant/cement-dubai/esp2/actuator/command"; }
+String actuatorStateTopic()                   { return "plant/cement-dubai/esp2/actuator/state"; }
+String overrideCommandTopic()                 { return "plant/cement-dubai/esp2/override/command"; }
+String overrideStatusTopic()                  { return "plant/cement-dubai/esp2/override/status"; }
 
 // ============================================================================
 // ============================================================================
@@ -228,19 +221,31 @@ void writeRelay(RelayChannel &r, bool on) {
   r.isOn = on;
 }
 
-void publishRelayState(RelayChannel &r) {
-  StaticJsonDocument<48> doc;
-  doc["value"] = r.isOn ? "on" : "off";
-  char payload[48];
+void publishAllActuators() {
+  StaticJsonDocument<512> doc;
+  doc["type"] = "actuators";
+  JsonObject values = doc.createNestedObject("values");
+  for (uint8_t i = 0; i < NUM_RELAYS; i++) {
+    values[relays[i].item_id] = relays[i].isOn ? "on" : "off";
+  }
+  char payload[512];
   serializeJson(doc, payload);
-  mqtt.publish(topicState(r.item_id).c_str(), payload, true); // retained
+  mqtt.publish(actuatorStateTopic().c_str(), payload, true); // retained
 }
 
-RelayChannel *relayForTopic(const String &topic) {
-  for (uint8_t i = 0; i < NUM_RELAYS; i++) {
-    if (topic == topicCmd(relays[i].item_id)) return &relays[i];
-  }
-  return nullptr;
+void publishAllOverrides() {
+  StaticJsonDocument<256> doc;
+  doc["type"] = "overrides";
+  JsonObject values = doc.createNestedObject("values");
+  values["klin"] = klinManualOverride;
+  values["klin_heater"] = heaterManualOverride;
+  char payload[256];
+  serializeJson(doc, payload);
+  mqtt.publish(overrideStatusTopic().c_str(), payload, true); // retained
+}
+
+void publishRelayState(RelayChannel &r) {
+  publishAllActuators();
 }
 
 RelayChannel *findRelay(const char *item_id) {
@@ -250,17 +255,8 @@ RelayChannel *findRelay(const char *item_id) {
   return nullptr;
 }
 
-// ============================================================================
-// ------------------------ MANUAL OVERRIDE HELPERS ---------------------------
-// ============================================================================
 void publishOverrideStatus(const char *relayId, bool isManual) {
-  char topic[64];
-  snprintf(topic, sizeof(topic), "plant/cement-dubai/esp2/%s/manual_override", relayId);
-  StaticJsonDocument<32> doc;
-  doc["value"] = isManual;
-  char payload[32];
-  serializeJson(doc, payload);
-  mqtt.publish(topic, payload, true); // retained
+  publishAllOverrides();
   Serial.printf("[OVERRIDE] %s -> manual=%s\n", relayId, isManual ? "true" : "false");
 }
 
@@ -313,8 +309,8 @@ void stopActuatorsSafely() {
   // Section 8 Requirement: De-energize all 13 active relay outputs (heaters, motors, crushers, conveyors, fans)
   for (uint8_t i = 0; i < NUM_RELAYS; i++) {
     writeRelay(relays[i], false);
-    publishRelayState(relays[i]);
   }
+  publishAllActuators();
   klinManualOverride = false;
   heaterManualOverride = false;
   Serial.println("[SAFETY] ESP2 safety shutdown confirmed: All 13 relay outputs are OFF (heaters, motors, fans, crushers).");
@@ -451,39 +447,37 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
   }
 
   // ---- Handle "Resume Auto" override clear commands ----
-    if (topicStr == "plant/cement-dubai/esp2/klin/override_cmd" ||
-      topicStr == "plant/cement-dubai/esp2/klin_heater/override_cmd") {
-    StaticJsonDocument<48> doc;
+  if (topicStr == overrideCommandTopic()) {
+    StaticJsonDocument<96> doc;
     DeserializationError err = deserializeJson(doc, payload, length);
     if (err) return;
     const char *command = doc["command"] | "";
-    if (strcmp(command, "auto") == 0) {
-      if (topicStr == "plant/cement-dubai/esp2/klin/override_cmd") {
-        klinManualOverride = false;
-        publishOverrideStatus("klin", false);
-        Serial.println("[OVERRIDE] klin -> PID auto resumed");
-      } else {
-        heaterManualOverride = false;
-        publishOverrideStatus("klin_heater", false);
-        Serial.println("[OVERRIDE] klin_heater -> PID auto resumed");
-      }
+    const char *actuatorId = doc["actuator"] | "";
+    if (strcmp(command, "auto") == 0 && strcmp(actuatorId, "klin") == 0) {
+      klinManualOverride = false;
+      publishOverrideStatus("klin", false);
+    } else if (strcmp(command, "auto") == 0 && strcmp(actuatorId, "klin_heater") == 0) {
+      heaterManualOverride = false;
+      publishOverrideStatus("klin_heater", false);
     }
     return;
   }
 
-  // ---- Handle normal relay ON/OFF commands ----
-  RelayChannel *r = relayForTopic(topicStr);
-  if (r == nullptr) return;
+  // ---- Handle common relay ON/OFF commands ----
+  if (topicStr != actuatorCommandTopic()) return;
 
-  StaticJsonDocument<48> doc;
+  StaticJsonDocument<96> doc;
   DeserializationError err = deserializeJson(doc, payload, length);
   if (err) {
     Serial.printf("[MQTT] Bad JSON on %s: %s\n", topic, err.c_str());
     return;
   }
 
+  const char *actuatorId = doc["actuator"] | "";
   const char *command = doc["command"] | "";
   const char *mode = doc["mode"] | "manual";
+  RelayChannel *r = findRelay(actuatorId);
+  if (r == nullptr) return;
   if (strcmp(command, "on") == 0) {
     writeRelay(*r, true);
   } else if (strcmp(command, "off") == 0) {
@@ -546,16 +540,12 @@ bool mqttConnect() {
   mqtt.subscribe("v1/devices/me/attributes/response/+");
   mqtt.subscribe("v1/devices/me/rpc/request/+");
 
-  for (uint8_t i = 0; i < NUM_RELAYS; i++) {
-    mqtt.subscribe(topicCmd(relays[i].item_id).c_str());
-    publishRelayState(relays[i]);
-  }
-
-  mqtt.subscribe("plant/cement-dubai/esp2/klin/override_cmd");
-  mqtt.subscribe("plant/cement-dubai/esp2/klin_heater/override_cmd");
-
-  publishOverrideStatus("klin",        klinManualOverride);
-  publishOverrideStatus("klin_heater", heaterManualOverride);
+  mqtt.subscribe(actuatorCommandTopic().c_str());
+  mqtt.subscribe(overrideCommandTopic().c_str());
+  
+  // Publish consolidated states once
+  publishAllActuators();
+  publishAllOverrides();
 
   return true;
 }
@@ -571,43 +561,15 @@ void maintainMqttConnection() {
 // ============================================================================
 // ------------------------------ SENSOR READING ------------------------------
 // ============================================================================
-void publishValue(const char *item_id, float value, const char *unit) {
-  StaticJsonDocument<64> doc;
-  doc["value"] = value;
-  doc["unit"]  = unit;
-  char payload[64];
-  serializeJson(doc, payload);
-  mqtt.publish(topicState(item_id).c_str(), payload);
-}
-
-void readAndPublishSensors() {
+void publishAllSensors() {
   float ct = klinDht.readTemperature();
   float ch = klinDht.readHumidity();
-  if (!isnan(ct) && !isnan(ch)) {
-    publishValue("klin_dht_temp", ct, "C");
-    publishValue("klin_dht_humidity", ch, "%");
-  } else {
-    Serial.println("[SENSOR] klin_dht read failed");
-  }
-
   float ot = coolerDht.readTemperature();
   float oh = coolerDht.readHumidity();
-  if (!isnan(ot) && !isnan(oh)) {
-    publishValue("cooler_dht_temp", ot, "C");
-    publishValue("cooler_dht_humidity", oh, "%");
-  } else {
-    Serial.println("[SENSOR] cooler_dht read failed");
-  }
-
   float pt = preheatDht.readTemperature();
   float ph = preheatDht.readHumidity();
-  if (!isnan(pt) && !isnan(ph)) {
-    publishValue("preheating_tower_dht_temp", pt, "C");
-    publishValue("preheating_tower_dht_humidity", ph, "%");
-  } else {
-    Serial.println("[SENSOR] preheating_tower_dht read failed");
-  }
 
+  // Read vibration
   unsigned long startMillis = millis();
   int maxRawPeak = MOTOR_OFF_BASELINE;
   while (millis() - startMillis < sampleWindow) {
@@ -618,12 +580,42 @@ void readAndPublishSensors() {
   if (trueVibrationRaw < 0) trueVibrationRaw = 0;
   float peakVoltage = (trueVibrationRaw * V_REF) / ADC_RES;
   float vibrationG = peakVoltage / REALISTIC_SENSITIVITY;
-  publishValue("vibration_sensor", vibrationG, "g");
+
+  StaticJsonDocument<512> doc;
+  doc["type"] = "sensors";
+  JsonObject values = doc.createNestedObject("values");
+
+  if (!isnan(ct)) values["klin_dht_temp"] = ct;
+  if (!isnan(ch)) values["klin_dht_humidity"] = ch;
+  if (!isnan(ot)) values["cooler_dht_temp"] = ot;
+  if (!isnan(oh)) values["cooler_dht_humidity"] = oh;
+  if (!isnan(pt)) values["preheating_tower_dht_temp"] = pt;
+  if (!isnan(ph)) values["preheating_tower_dht_humidity"] = ph;
+  values["vibration_sensor"] = vibrationG;
+
+  char payload[512];
+  serializeJson(doc, payload);
+  mqtt.publish(valuesTopic().c_str(), payload);
 
   if (!isnan(ct)) {
     Serial.printf("[SENSOR] klin: %.1fC %.0f%%  cooler: %.1fC %.0f%%  preheat: %.1fC %.0f%%  vib: %.3fg\n",
                   ct, ch, ot, oh, pt, ph, vibrationG);
   }
+}
+
+void publishValue(const char *item_id, float value, const char *unit) {
+  StaticJsonDocument<128> doc;
+  doc["type"] = "sensor";
+  doc["sensor"] = item_id;
+  doc["value"] = value;
+  doc["unit"]  = unit;
+  char payload[192];
+  serializeJson(doc, payload);
+  mqtt.publish(valuesTopic().c_str(), payload);
+}
+
+void readAndPublishSensors() {
+  publishAllSensors();
 }
 
 // ============================================================================
