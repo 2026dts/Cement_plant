@@ -1,0 +1,634 @@
+/*
+  ESP32-2 – 16-Channel Relay Board (2 x 8ch) + 3x DHT11 + 1x Vibration Sensor
+  Mosquitto MQTT with Static IP Configuration
+  ======================================================================================
+  NETWORK CONFIGURATION:
+    WiFi SSID:        OOMNI-EYE-2.4GHz
+    WiFi Password:    Admin@2026
+    Static IP:        10.10.12.157
+    Gateway:          10.10.12.1
+    Subnet Mask:      255.255.255.0
+    DNS:              8.8.8.8
+
+  MQTT:
+    Broker:           5c0b21424f334243b66237dfd2f9b565.s1.eu.hivemq.cloud
+    Port:             8883 (TLS)
+    Username:         admin
+    Password:         Admin@321
+
+  Hardware on this board:
+    - Two 8-channel relay modules (16 channels total). 13 are wired to actual
+      loads for this build; channels 14-16 are spare (see note at the bottom -
+      the onboard GPIO is now fully used up by channels 1-13 + the 3 sensors
+      below, so wiring the remaining 3 spare channels later will need an I2C
+      GPIO expander such as a PCF8574, not more direct ESP32 pins).
+    - 3x DHT11 temperature/humidity sensors (read-only, not relay-controlled).
+    - 1x vibration SENSOR (read-only, separate from the vibration MOTOR below).
+
+  Channel -> function mapping (as supplied):
+    Channel 1  -> crusher                 (ONE relay drives all 3 N20 motors together:
+                                            left, right, and wheel motor - wired in
+                                            parallel to this single relay output)
+    Channel 2  -> conveyor_1
+    Channel 3  -> conveyor_2
+    Channel 4  -> conveyor_3
+    Channel 5  -> conveyor_4
+    Channel 6  -> klin                          (kiln motor)
+    Channel 7  -> klin_heater                   (inside the klin) [RENAMED from "heater"]
+    Channel 8  -> heat_blower                   (mini exhaust fan, next to klin_heater, inside the klin)
+    Channel 9  -> preheating_tower_fan          (preheating tower fan - renamed from cooler_fan)
+    Channel 10 -> preheating_tower_heater       [NEW - reuses the channel/pin freed by removing klin_cooler_fan]
+    Channel 11 -> vibration_motor
+    Channel 12 -> ball_mill_1
+    Channel 13 -> ball_mill_2
+    Channel 14-16 -> spare, not wired yet (see GPIO note above)
+
+  REMOVED: klin_cooler_fan (no longer wired - its relay/GPIO was reassigned to
+  preheating_tower_heater above).
+
+  DHT11 sensors -> renamed / added:
+    dht1  -> klin_dht              (unchanged location: near klin/heater)     [RENAMED from "dht1"]
+    dht2  -> cooler_dht            (unchanged location: near the cooler)      [RENAMED from "dht2"]
+    NEW   -> preheating_tower_dht  (near the preheating tower / new heater)
+
+  ================================ LIBRARIES ================================
+  Install via Arduino IDE -> Tools -> Manage Libraries:
+    - "PubSubClient"                                (by Nick O'Leary)
+    - "ArduinoJson"                                 v6.x.x
+    - "DHT sensor library" (by Adafruit) + "Adafruit Unified Sensor"
+*/
+
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+#include <DHT.h>
+#include <HTTPUpdate.h>
+#include <esp_ota_ops.h>
+#include <esp_system.h>
+
+// ============================================================================
+// ---------------------------- USER CONFIGURATION ---------------------------
+// ============================================================================
+constexpr char FIRMWARE_TITLE[]   = "esp2_relay";
+constexpr char FIRMWARE_VERSION[] = "1.0.1-hive-static-ip";
+
+// ✅ UPDATED WiFi CREDENTIALS
+constexpr char WIFI_SSID[]     = "OOMNI-EYE-2.4GHz";
+constexpr char WIFI_PASSWORD[] = "Admin@2026";
+
+// ✅ STATIC IP CONFIGURATION (no constexpr for IPAddress)
+IPAddress STATIC_IP(10, 10, 12, 157);
+IPAddress GATEWAY(10, 10, 12, 1);
+IPAddress SUBNET(255, 255, 255, 0);
+IPAddress DNS_SERVER(8, 8, 8, 8);  // Google DNS
+
+constexpr char MQTT_BROKER_HOST[] = "5c0b21424f334243b66237dfd2f9b565.s1.eu.hivemq.cloud"; // HiveMQ Cloud
+constexpr uint16_t MQTT_BROKER_PORT = 8883U;  // HiveMQ TLS port
+constexpr char MQTT_USER[]     = "admin";          // HiveMQ Cloud username
+constexpr char MQTT_PASSWORD[] = "Admin@321";
+constexpr char MQTT_CLIENT_ID[] = "esp2-relay";
+constexpr char TB_HTTP_BASE[]     = "http://allcad-chennai.selfip.com:8081";
+constexpr char TB_DEVICE_TOKEN[]  = "esp2";
+
+constexpr uint32_t MQTT_RECONNECT_DELAY_MS = 2000UL;
+constexpr uint32_t STATE_REPUBLISH_MS      = 10000UL;
+constexpr uint32_t DHT_READ_MS             = 2000UL;
+
+constexpr bool RELAY_ACTIVE_LOW = true;
+
+// ============================================================================
+// ------------------------------ RELAY CHANNELS -------------------------------
+// ============================================================================
+struct RelayChannel {
+  const char *item_id;
+  uint8_t     pin;
+  bool        isOn = false;
+};
+
+RelayChannel relays[13] = {
+  { "crusher",                22  },
+  { "conveyor_1",             27  },
+  { "conveyor_2",             23 },
+  { "conveyor_3",             19 },
+  { "conveyor_4",             13 },
+  { "klin",                   21 },
+  { "klin_heater",            18 },
+  { "heat_blower",            2 },
+  { "preheating_tower_fan",   5 },
+  { "preheating_tower_heater",4 },
+  { "vibration_motor",        14 },
+  { "ball_mill_1",            32 },
+  { "ball_mill_2",            33 },
+};
+constexpr uint8_t NUM_RELAYS = 13;
+
+// ============================================================================
+// ------------------------------ SENSOR CHANNELS -------------------------------
+// ============================================================================
+#define KLIN_DHT_PIN 15
+#define COOLER_DHT_PIN 25
+#define PREHEAT_DHT_PIN 26
+#define DHT_TYPE DHT11
+DHT klinDht(KLIN_DHT_PIN, DHT_TYPE);
+DHT coolerDht(COOLER_DHT_PIN, DHT_TYPE);
+DHT preheatDht(PREHEAT_DHT_PIN, DHT_TYPE);
+
+const int sensorPin = 34;
+const unsigned long sampleWindow = 50;
+
+const float V_REF = 3.3;
+const float ADC_RES = 4095.0;
+const float REALISTIC_SENSITIVITY = 0.62;
+const int MOTOR_OFF_BASELINE = 0;
+
+// ============================================================================
+// ------------------------------- MQTT CLIENT --------------------------------
+// ============================================================================
+WiFiClientSecure espClient;
+WiFiClient otaHttpClient;
+PubSubClient mqtt(espClient);
+
+unsigned long lastReconnectAttemptMs = 0;
+unsigned long lastStateRepublishMs   = 0;
+unsigned long lastDhtReadMs          = 0;
+
+String valuesTopic()                          { return "plant/cement-dubai/esp2/values"; }
+String actuatorCommandTopic()                 { return "plant/cement-dubai/esp2/actuator/command"; }
+String actuatorStateTopic()                   { return "plant/cement-dubai/esp2/actuator/state"; }
+String overrideCommandTopic()                 { return "plant/cement-dubai/esp2/override/command"; }
+String overrideStatusTopic()                  { return "plant/cement-dubai/esp2/override/status"; }
+
+bool klinManualOverride    = false;
+bool heaterManualOverride  = false;
+
+// ============================================================================
+// --------------------------------- WIFI - STATIC IP ✅ ----
+// ============================================================================
+void initWiFi() {
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(WIFI_SSID);
+  WiFi.mode(WIFI_STA);
+  
+  // ✅ CONFIGURE STATIC IP BEFORE WiFi.begin()
+  Serial.println("[WIFI] Configuring static IP...");
+  Serial.printf("[WIFI] IP: %s\n", STATIC_IP.toString().c_str());
+  Serial.printf("[WIFI] Gateway: %s\n", GATEWAY.toString().c_str());
+  Serial.printf("[WIFI] Subnet: %s\n", SUBNET.toString().c_str());
+  Serial.printf("[WIFI] DNS: %s\n", DNS_SERVER.toString().c_str());
+  
+  if (!WiFi.config(STATIC_IP, GATEWAY, SUBNET, DNS_SERVER)) {
+    Serial.println("[WIFI] ERROR: Failed to configure static IP!");
+  } else {
+    Serial.println("[WIFI] Static IP configuration successful!");
+  }
+  
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\n[WIFI] Connection attempt timed out - will retry in loop()");
+    return;
+  }
+  
+  Serial.println("\n✅ WiFi connected!");
+  Serial.printf("[WIFI] IP: %s (Static)\n", WiFi.localIP().toString().c_str());
+  Serial.printf("[WIFI] Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+  Serial.printf("[WIFI] RSSI: %d dBm\n", WiFi.RSSI());
+}
+
+bool reconnectWiFiIfNeeded() {
+  if (WiFi.status() == WL_CONNECTED) return true;
+  
+  Serial.println("[WIFI] WiFi disconnected, reconnecting...");
+  WiFi.disconnect();
+  delay(100);
+  
+  // ✅ REAPPLY STATIC IP CONFIG
+  WiFi.config(STATIC_IP, GATEWAY, SUBNET, DNS_SERVER);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  
+  return true;
+}
+
+// ============================================================================
+// ------------------------------- RELAY CONTROL -------------------------------
+// ============================================================================
+void writeRelay(RelayChannel &r, bool on) {
+  digitalWrite(r.pin, RELAY_ACTIVE_LOW ? (on ? LOW : HIGH) : (on ? HIGH : LOW));
+  r.isOn = on;
+}
+
+void publishAllActuators() {
+  StaticJsonDocument<512> doc;
+  doc["type"] = "actuators";
+  JsonObject values = doc.createNestedObject("values");
+  for (uint8_t i = 0; i < NUM_RELAYS; i++) {
+    values[relays[i].item_id] = relays[i].isOn ? "on" : "off";
+  }
+  char payload[512];
+  serializeJson(doc, payload);
+  mqtt.publish(actuatorStateTopic().c_str(), payload, true);
+}
+
+void publishAllOverrides() {
+  StaticJsonDocument<256> doc;
+  doc["type"] = "overrides";
+  JsonObject values = doc.createNestedObject("values");
+  values["klin"] = klinManualOverride;
+  values["klin_heater"] = heaterManualOverride;
+  char payload[256];
+  serializeJson(doc, payload);
+  mqtt.publish(overrideStatusTopic().c_str(), payload, true);
+}
+
+void publishRelayState(RelayChannel &r) {
+  publishAllActuators();
+}
+
+RelayChannel *findRelay(const char *item_id) {
+  for (uint8_t i = 0; i < NUM_RELAYS; i++) {
+    if (strcmp(relays[i].item_id, item_id) == 0) return &relays[i];
+  }
+  return nullptr;
+}
+
+void publishOverrideStatus(const char *relayId, bool isManual) {
+  publishAllOverrides();
+  Serial.printf("[OVERRIDE] %s -> manual=%s\n", relayId, isManual ? "true" : "false");
+}
+
+// ============================================================================
+// -------------------------- OTA & REBOOT MANAGEMENT -------------------------
+// ============================================================================
+void publishFwVersion() {
+  StaticJsonDocument<128> doc;
+  doc["title"]   = FIRMWARE_TITLE;
+  doc["version"] = FIRMWARE_VERSION;
+  char payload[128];
+  serializeJson(doc, payload);
+  mqtt.publish("plant/cement-dubai/esp2/version", payload, true);
+
+  StaticJsonDocument<192> tbDoc;
+  tbDoc["current_fw_title"]   = FIRMWARE_TITLE;
+  tbDoc["current_fw_version"] = FIRMWARE_VERSION;
+  tbDoc["fw_state"]           = "UPDATED";
+  char tbPayload[192];
+  serializeJson(tbDoc, tbPayload);
+  mqtt.publish("v1/devices/me/telemetry", tbPayload);
+}
+
+#include <Update.h>
+
+void publishOtaStatus(const char *tbState, int progress, const char *msg) {
+  StaticJsonDocument<256> doc;
+  doc["title"]    = FIRMWARE_TITLE;
+  doc["version"]  = FIRMWARE_VERSION;
+  doc["status"]   = tbState;
+  doc["progress"] = progress;
+  doc["message"]  = msg;
+  char payload[256];
+  serializeJson(doc, payload);
+  mqtt.publish("plant/cement-dubai/esp2/ota/status", payload, true);
+
+  StaticJsonDocument<256> tbDoc;
+  tbDoc["current_fw_title"]   = FIRMWARE_TITLE;
+  tbDoc["current_fw_version"] = FIRMWARE_VERSION;
+  tbDoc["fw_state"]           = tbState;
+  tbDoc["fw_progress"]        = progress;
+  tbDoc["fw_message"]         = msg;
+  char tbPayload[256];
+  serializeJson(tbDoc, tbPayload);
+  mqtt.publish("v1/devices/me/telemetry", tbPayload);
+}
+
+void stopActuatorsSafely() {
+  for (uint8_t i = 0; i < NUM_RELAYS; i++) {
+    writeRelay(relays[i], false);
+  }
+  publishAllActuators();
+  klinManualOverride = false;
+  heaterManualOverride = false;
+  Serial.println("[SAFETY] ESP2 safety shutdown confirmed: All 13 relay outputs are OFF.");
+}
+
+void performReboot() {
+  Serial.println("[SYSTEM] Remote reboot requested! Shutting down relays...");
+  stopActuatorsSafely();
+  mqtt.publish("plant/cement-dubai/esp2/status", "{\"value\":\"rebooting\"}", true);
+  mqtt.loop();
+  delay(500);
+  ESP.restart();
+}
+
+void performOTA(const char *url = "", const char *checksum = "", const char *newVersion = "") {
+  Serial.printf("[OTA] OTA Triggered! URL: %s, Checksum: %s, Target Version: %s\n", url, checksum, newVersion);
+  stopActuatorsSafely();
+  publishOtaStatus("INITIATED", 0, "All 13 relays OFF. Starting firmware download...");
+  delay(300);
+  publishOtaStatus("DOWNLOADING", 5, "Downloading firmware...");
+
+  if (strlen(checksum) == 32) {
+    Serial.printf("[OTA] Setting MD5 Checksum: %s\n", checksum);
+    httpUpdate.setMD5sum(checksum);
+  }
+
+  httpUpdate.onStart([]() {
+    Serial.println("[OTA] Update flash process started...");
+  });
+
+  httpUpdate.onEnd([]() {
+    Serial.println("[OTA] Download and flash completed!");
+  });
+
+  httpUpdate.onProgress([](int cur, int total) {
+    int pct = (total > 0) ? (cur * 100) / total : 0;
+    Serial.printf("[OTA] Progress: %d%%\n", pct);
+  });
+
+  String downloadUrl = String(url);
+  if (downloadUrl.length() == 0) {
+    downloadUrl = String(TB_HTTP_BASE) + "/api/v1/" + String(TB_DEVICE_TOKEN) + "/firmware?title=" + String(FIRMWARE_TITLE) + "&version=" + String(newVersion);
+  }
+
+  Serial.printf("[OTA] Downloading from: %s\n", downloadUrl.c_str());
+
+  t_httpUpdate_return ret;
+  if (downloadUrl.startsWith("https://")) {
+    WiFiClientSecure otaHttpsClient;
+    otaHttpsClient.setInsecure();
+    ret = httpUpdate.update(otaHttpsClient, downloadUrl.c_str());
+  } else {
+    ret = httpUpdate.update(otaHttpClient, downloadUrl.c_str());
+  }
+
+  switch (ret) {
+    case HTTP_UPDATE_FAILED: {
+      String errStr = String(httpUpdate.getLastErrorString());
+      Serial.printf("[OTA] Failed! Error (%d): %s\n", httpUpdate.getLastError(), errStr.c_str());
+      publishOtaStatus("FAILED", 0, errStr.c_str());
+      break;
+    }
+    case HTTP_UPDATE_NO_UPDATES:
+      Serial.println("[OTA] No firmware package found");
+      publishOtaStatus("FAILED", 0, "No firmware package found");
+      break;
+    case HTTP_UPDATE_OK:
+      Serial.println("[OTA] Firmware verified! Rebooting...");
+      publishOtaStatus("VERIFIED", 95, "Checksum verified. Rebooting device...");
+      mqtt.loop();
+      delay(1000);
+      ESP.restart();
+      break;
+  }
+}
+
+// ============================================================================
+// -------------------------------- MQTT CALLBACK ------------------------------
+// ============================================================================
+void mqttCallback(char *topic, byte *payload, unsigned int length) {
+  String topicStr(topic);
+  Serial.printf("[MQTT RX] %s -> %.*s\n", topic, length, (char *)payload);
+
+  if (topicStr == "plant/cement-dubai/esp2/cmd/reboot" || topicStr == "plant/cement-dubai/cmd/reboot/all") {
+    performReboot();
+    return;
+  }
+
+  if (topicStr == "plant/cement-dubai/esp2/ota/cmd" || topicStr == "plant/cement-dubai/ota/cmd/all") {
+    StaticJsonDocument<256> otaDoc;
+    DeserializationError err = deserializeJson(otaDoc, payload, length);
+    if (!err) {
+      const char *url      = otaDoc["url"] | "";
+      const char *checksum = otaDoc["checksum"] | "";
+      const char *ver      = otaDoc["version"] | "";
+      performOTA(url, checksum, ver);
+    }
+    return;
+  }
+
+  if (topicStr.startsWith("v1/devices/me/rpc/request/")) {
+    StaticJsonDocument<256> rpcDoc;
+    DeserializationError err = deserializeJson(rpcDoc, payload, length);
+    if (!err) {
+      const char *method = rpcDoc["method"] | "";
+      if (strcmp(method, "reboot") == 0) {
+        performReboot();
+        return;
+      }
+    }
+  }
+
+  if (topicStr == overrideCommandTopic()) {
+    StaticJsonDocument<96> doc;
+    DeserializationError err = deserializeJson(doc, payload, length);
+    if (err) return;
+    const char *command = doc["command"] | "";
+    const char *actuatorId = doc["actuator"] | "";
+    if (strcmp(command, "auto") == 0 && strcmp(actuatorId, "klin") == 0) {
+      klinManualOverride = false;
+      publishOverrideStatus("klin", false);
+    } else if (strcmp(command, "auto") == 0 && strcmp(actuatorId, "klin_heater") == 0) {
+      heaterManualOverride = false;
+      publishOverrideStatus("klin_heater", false);
+    }
+    return;
+  }
+
+  if (topicStr != actuatorCommandTopic()) return;
+
+  StaticJsonDocument<96> doc;
+  DeserializationError err = deserializeJson(doc, payload, length);
+  if (err) {
+    Serial.printf("[MQTT] Bad JSON: %s\n", err.c_str());
+    return;
+  }
+
+  const char *actuatorId = doc["actuator"] | "";
+  const char *command = doc["command"] | "";
+  const char *mode = doc["mode"] | "manual";
+  RelayChannel *r = findRelay(actuatorId);
+  if (r == nullptr) return;
+  
+  if (strcmp(command, "on") == 0) {
+    writeRelay(*r, true);
+  } else if (strcmp(command, "off") == 0) {
+    writeRelay(*r, false);
+  }
+
+  if (strcmp(mode, "auto") == 0) {
+    Serial.printf("[AUTO] %s -> %s\n", r->item_id, r->isOn ? "ON" : "OFF");
+  } else if (strcmp(r->item_id, "klin") == 0) {
+    klinManualOverride = true;
+    publishOverrideStatus("klin", true);
+  } else if (strcmp(r->item_id, "klin_heater") == 0) {
+    heaterManualOverride = true;
+    publishOverrideStatus("klin_heater", true);
+  }
+
+  Serial.printf("[RELAY] %s -> %s\n", r->item_id, r->isOn ? "ON" : "OFF");
+  publishRelayState(*r);
+}
+
+// ============================================================================
+// -------------------------------- MQTT CONNECT --------------------------------
+// ============================================================================
+bool mqttConnect() {
+  Serial.printf("Connecting to HiveMQ Cloud (%s:%u)...\n", MQTT_BROKER_HOST, MQTT_BROKER_PORT);
+  String clientId = String(MQTT_CLIENT_ID) + String(random(100000, 999999));
+  const char *cid = clientId.c_str();
+
+  const char *willTopic  = "plant/cement-dubai/esp2/status";
+  const char *willMsg    = "{\"value\":\"offline\"}";
+  uint8_t     willQos    = 1;
+  boolean     willRetain = true;
+
+  bool ok = strlen(MQTT_USER) > 0
+              ? mqtt.connect(cid, MQTT_USER, MQTT_PASSWORD, willTopic, willQos, willRetain, willMsg)
+              : mqtt.connect(cid, willTopic, willQos, willRetain, willMsg);
+
+  if (!ok) {
+    Serial.printf("[MQTT] Connect failed, rc=%d\n", mqtt.state());
+    return false;
+  }
+
+  Serial.println("[MQTT] Connected to HiveMQ Cloud!");
+
+  mqtt.publish("plant/cement-dubai/esp2/status", "{\"value\":\"online\"}", true);
+  publishOtaStatus("UPDATED", 100, "Firmware is running");
+  publishFwVersion();
+  Serial.println("[MQTT] Published: plant/cement-dubai/esp2/status = online");
+
+  mqtt.subscribe("plant/cement-dubai/esp2/ota/cmd");
+  mqtt.subscribe("plant/cement-dubai/ota/cmd/all");
+  mqtt.subscribe("plant/cement-dubai/esp2/cmd/reboot");
+  mqtt.subscribe("plant/cement-dubai/cmd/reboot/all");
+  mqtt.subscribe("v1/devices/me/attributes");
+  mqtt.subscribe("v1/devices/me/attributes/response/+");
+  mqtt.subscribe("v1/devices/me/rpc/request/+");
+  mqtt.subscribe(actuatorCommandTopic().c_str());
+  mqtt.subscribe(overrideCommandTopic().c_str());
+  
+  publishAllActuators();
+  publishAllOverrides();
+
+  return true;
+}
+
+void maintainMqttConnection() {
+  if (mqtt.connected()) return;
+  unsigned long now = millis();
+  if (now - lastReconnectAttemptMs < MQTT_RECONNECT_DELAY_MS) return;
+  lastReconnectAttemptMs = now;
+  mqttConnect();
+}
+
+// ============================================================================
+// ------------------------------ SENSOR READING --------------------------------
+// ============================================================================
+void publishAllSensors() {
+  float ct = klinDht.readTemperature();
+  float ch = klinDht.readHumidity();
+  float ot = coolerDht.readTemperature();
+  float oh = coolerDht.readHumidity();
+  float pt = preheatDht.readTemperature();
+  float ph = preheatDht.readHumidity();
+
+  unsigned long startMillis = millis();
+  int maxRawPeak = MOTOR_OFF_BASELINE;
+  while (millis() - startMillis < sampleWindow) {
+    int currentRaw = analogRead(sensorPin);
+    if (currentRaw > maxRawPeak) maxRawPeak = currentRaw;
+  }
+  int trueVibrationRaw = maxRawPeak - MOTOR_OFF_BASELINE;
+  if (trueVibrationRaw < 0) trueVibrationRaw = 0;
+  float peakVoltage = (trueVibrationRaw * V_REF) / ADC_RES;
+  float vibrationG = peakVoltage / REALISTIC_SENSITIVITY;
+
+  StaticJsonDocument<512> doc;
+  doc["type"] = "sensors";
+  JsonObject values = doc.createNestedObject("values");
+
+  if (!isnan(ct)) values["klin_dht_temp"] = ct;
+  if (!isnan(ch)) values["klin_dht_humidity"] = ch;
+  if (!isnan(ot)) values["cooler_dht_temp"] = ot;
+  if (!isnan(oh)) values["cooler_dht_humidity"] = oh;
+  if (!isnan(pt)) values["preheating_tower_dht_temp"] = pt;
+  if (!isnan(ph)) values["preheating_tower_dht_humidity"] = ph;
+  values["vibration_sensor"] = vibrationG;
+
+  char payload[512];
+  serializeJson(doc, payload);
+  mqtt.publish(valuesTopic().c_str(), payload);
+
+  if (!isnan(ct)) {
+    Serial.printf("[SENSOR] klin: %.1fC %.0f%%  cooler: %.1fC %.0f%%  preheat: %.1fC %.0f%%  vib: %.3fg\n",
+                  ct, ch, ot, oh, pt, ph, vibrationG);
+  }
+}
+
+void readAndPublishSensors() {
+  publishAllSensors();
+}
+
+// ============================================================================
+// ---------------------------------- SETUP -----------------------------------
+// ============================================================================
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("\n=== ESP32-2 Relay + Sensor Node - Booting (STATIC IP: 10.10.12.157) ===");
+
+  esp_ota_mark_app_valid_cancel_rollback();
+
+  for (uint8_t i = 0; i < NUM_RELAYS; i++) {
+    pinMode(relays[i].pin, OUTPUT);
+    writeRelay(relays[i], false);
+  }
+
+  klinDht.begin();
+  coolerDht.begin();
+  preheatDht.begin();
+  analogSetAttenuation(ADC_11db);
+
+  initWiFi();
+  espClient.setInsecure();
+  mqtt.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
+  mqtt.setCallback(mqttCallback);
+
+  Serial.println("=== Setup complete ===\n");
+}
+
+// ============================================================================
+// ----------------------------------- LOOP -----------------------------------
+// ============================================================================
+void loop() {
+  if (!reconnectWiFiIfNeeded()) {
+    delay(500);
+    return;
+  }
+
+  maintainMqttConnection();
+  if (mqtt.connected()) {
+    mqtt.loop();
+  }
+
+  unsigned long now = millis();
+
+  if (mqtt.connected() && now - lastStateRepublishMs >= STATE_REPUBLISH_MS) {
+    lastStateRepublishMs = now;
+    for (uint8_t i = 0; i < NUM_RELAYS; i++) {
+      publishRelayState(relays[i]);
+    }
+  }
+
+  if (mqtt.connected() && now - lastDhtReadMs >= DHT_READ_MS) {
+    lastDhtReadMs = now;
+    readAndPublishSensors();
+  }
+}

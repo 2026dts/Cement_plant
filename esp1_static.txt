@@ -1,0 +1,1841 @@
+/*
+  ESP32-1 — 4x Load Cell + 5x Servo
+  Material Dispensing + Raw Gate
+  HiveMQ MQTT + ThingsBoard OTA
+
+  WIFI:
+    SSID      : OOMNI-EYE-2.4GHz
+    Static IP : 10.10.12.70
+    Gateway   : 10.10.12.1
+    Subnet    : 255.255.255.0
+    DNS       : 8.8.8.8
+*/
+
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+#include <HX711.h>
+#include <ESP32Servo.h>
+#include <HTTPUpdate.h>
+#include <esp_ota_ops.h>
+#include <esp_system.h>
+#include <Update.h>
+
+// ============================================================================
+// USER CONFIGURATION
+// ============================================================================
+
+constexpr char FIRMWARE_TITLE[]   = "esp1_materials";
+constexpr char FIRMWARE_VERSION[] = "1.0.1-hive-static-ip";
+
+// ============================================================================
+// WIFI CONFIGURATION
+// ============================================================================
+
+constexpr char WIFI_SSID[]     = "OOMNI-EYE-2.4GHz";
+constexpr char WIFI_PASSWORD[] = "Admin@2026";
+
+// Static IP configuration
+IPAddress STATIC_IP(10, 10, 12, 70);
+IPAddress GATEWAY(10, 10, 12, 1);
+IPAddress SUBNET(255, 255, 255, 0);
+IPAddress DNS_SERVER(8, 8, 8, 8);
+
+// ============================================================================
+// MQTT CONFIGURATION
+// ============================================================================
+
+constexpr char MQTT_BROKER_HOST[] =
+    "5c0b21424f334243b66237dfd2f9b565.s1.eu.hivemq.cloud";
+
+constexpr uint16_t MQTT_BROKER_PORT = 8883U;
+
+constexpr char MQTT_USER[]      = "admin";
+constexpr char MQTT_PASSWORD[]  = "Admin@321";
+constexpr char MQTT_CLIENT_ID[] = "esp1-materials";
+
+constexpr char TB_HTTP_BASE[] =
+    "http://allcad-chennai.selfip.com:8081";
+
+constexpr char TB_DEVICE_TOKEN[] = "esp1";
+
+constexpr uint32_t TELEMETRY_INTERVAL_MS   = 500UL;
+constexpr uint32_t MQTT_RECONNECT_DELAY_MS = 2000UL;
+
+// ============================================================================
+// LOAD CELL / SERVO CONFIGURATION
+// ============================================================================
+
+// Keep calibration exactly as supplied
+constexpr float CALIBRATION_FACTOR = 96.322f;
+
+constexpr int SERVO_HOME_ANGLE = 30;
+constexpr int SERVO_MAX_ANGLE  = 140;
+
+constexpr uint8_t SHARED_SCK_PIN = 32;
+
+constexpr uint32_t HX711_INIT_TIMEOUT_MS    = 3000UL;
+constexpr uint32_t HX711_RETRY_INTERVAL_MS  = 5000UL;
+
+// ============================================================================
+// MATERIAL STRUCTURE
+// ============================================================================
+
+struct MaterialFeed {
+  const char *item_id;
+
+  uint8_t dout_pin;
+  uint8_t servo_pin;
+
+  HX711 loadCell;
+  Servo servo;
+
+  bool hxReady = false;
+  bool tared = false;
+  bool dispensing = false;
+
+  float targetGrams = 0.0f;
+  float lastWeight  = 0.0f;
+
+  unsigned long lastInitAttemptMs = 0;
+};
+
+// ============================================================================
+// MATERIAL PIN CONFIGURATION
+// ============================================================================
+
+MaterialFeed materials[4] = {
+
+  // Material      HX711 DOUT   Servo GPIO
+
+  { "gypsum",       22,          27 },
+  { "clay",         23,          26 },
+  { "iron_ore",      5,          14 },
+  { "sand",         15,          13 }
+
+};
+
+constexpr uint8_t NUM_MATERIALS = 4;
+
+// Lime stone raw gate servo
+Servo limeStoneGate;
+
+bool limeStoneGateOpen = false;
+
+// ============================================================================
+// MQTT CLIENT
+// ============================================================================
+
+WiFiClientSecure espClient;
+WiFiClient otaHttpClient;
+
+PubSubClient mqtt(espClient);
+
+unsigned long lastTelemetryMs = 0;
+unsigned long lastReconnectAttemptMs = 0;
+
+// ============================================================================
+// MQTT TOPICS
+// ============================================================================
+
+String commandTopic() {
+  return "plant/cement-dubai/esp1/command";
+}
+
+String valuesTopic() {
+  return "plant/cement-dubai/esp1/values";
+}
+
+String statusTopic() {
+  return "plant/cement-dubai/esp1/status";
+}
+
+String actuatorCommandTopic() {
+  return "plant/cement-dubai/esp1/actuator/command";
+}
+
+String actuatorStateTopic() {
+  return "plant/cement-dubai/esp1/actuator/state";
+}
+
+// ============================================================================
+// WIFI
+// ============================================================================
+
+void initWiFi() {
+
+  Serial.println();
+  Serial.println("==========================================");
+  Serial.println("          ESP32 WiFi Setup");
+  Serial.println("==========================================");
+
+  WiFi.mode(WIFI_STA);
+
+  // Disconnect old connection
+  WiFi.disconnect(true);
+  delay(500);
+
+  // --------------------------------------------------
+  // Configure STATIC IP BEFORE WiFi.begin()
+  // --------------------------------------------------
+
+  Serial.println("[WIFI] Configuring Static IP...");
+
+  if (!WiFi.config(
+        STATIC_IP,
+        GATEWAY,
+        SUBNET,
+        DNS_SERVER
+      )) {
+
+    Serial.println("[WIFI] ERROR: Static IP configuration failed!");
+
+  } else {
+
+    Serial.println("[WIFI] Static IP configuration successful!");
+
+  }
+
+  Serial.println();
+  Serial.print("[WIFI] SSID       : ");
+  Serial.println(WIFI_SSID);
+
+  Serial.print("[WIFI] Static IP  : ");
+  Serial.println(STATIC_IP);
+
+  Serial.print("[WIFI] Gateway    : ");
+  Serial.println(GATEWAY);
+
+  Serial.print("[WIFI] Subnet     : ");
+  Serial.println(SUBNET);
+
+  Serial.print("[WIFI] DNS        : ");
+  Serial.println(DNS_SERVER);
+
+  Serial.println();
+  Serial.println("[WIFI] Connecting...");
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  int attempts = 0;
+
+  while (
+    WiFi.status() != WL_CONNECTED &&
+    attempts < 40
+  ) {
+
+    delay(500);
+    Serial.print(".");
+
+    attempts++;
+  }
+
+  Serial.println();
+
+  if (WiFi.status() != WL_CONNECTED) {
+
+    Serial.println("[WIFI] Connection timeout!");
+    Serial.println("[WIFI] Will retry from loop().");
+
+    return;
+  }
+
+  Serial.println();
+  Serial.println("==========================================");
+  Serial.println("            WIFI CONNECTED");
+  Serial.println("==========================================");
+
+  Serial.print("SSID       : ");
+  Serial.println(WiFi.SSID());
+
+  Serial.print("IP Address : ");
+  Serial.println(WiFi.localIP());
+
+  Serial.print("Gateway    : ");
+  Serial.println(WiFi.gatewayIP());
+
+  Serial.print("Subnet     : ");
+  Serial.println(WiFi.subnetMask());
+
+  Serial.print("DNS        : ");
+  Serial.println(WiFi.dnsIP());
+
+  Serial.print("MAC        : ");
+  Serial.println(WiFi.macAddress());
+
+  Serial.print("RSSI       : ");
+  Serial.print(WiFi.RSSI());
+  Serial.println(" dBm");
+
+  Serial.println("==========================================");
+}
+
+// ============================================================================
+// WIFI RECONNECT
+// ============================================================================
+
+bool reconnectWiFiIfNeeded() {
+
+  if (WiFi.status() == WL_CONNECTED) {
+    return true;
+  }
+
+  Serial.println("[WIFI] Disconnected. Reconnecting...");
+
+  WiFi.disconnect();
+
+  delay(100);
+
+  // Reapply static IP
+  WiFi.config(
+    STATIC_IP,
+    GATEWAY,
+    SUBNET,
+    DNS_SERVER
+  );
+
+  WiFi.begin(
+    WIFI_SSID,
+    WIFI_PASSWORD
+  );
+
+  return false;
+}
+
+// ============================================================================
+// HX711 SAFE INITIALIZATION
+// ============================================================================
+
+bool beginLoadCellWithTimeout(
+  MaterialFeed &m,
+  uint32_t timeoutMs = HX711_INIT_TIMEOUT_MS
+) {
+
+  pinMode(SHARED_SCK_PIN, OUTPUT);
+
+  pinMode(
+    m.dout_pin,
+    INPUT
+  );
+
+  digitalWrite(
+    SHARED_SCK_PIN,
+    LOW
+  );
+
+  uint32_t start = millis();
+
+  while (
+    digitalRead(m.dout_pin) == HIGH
+  ) {
+
+    if (
+      millis() - start > timeoutMs
+    ) {
+
+      Serial.printf(
+        "[HX711] %s NOT responding on GPIO%d\n",
+        m.item_id,
+        m.dout_pin
+      );
+
+      return false;
+    }
+
+    yield();
+  }
+
+  m.loadCell.begin(
+    m.dout_pin,
+    SHARED_SCK_PIN
+  );
+
+  m.loadCell.set_scale(
+    CALIBRATION_FACTOR
+  );
+
+  m.hxReady = true;
+
+  Serial.printf(
+    "[HX711] %s ready on GPIO%d\n",
+    m.item_id,
+    m.dout_pin
+  );
+
+  return true;
+}
+
+// ============================================================================
+// READ LOAD CELL
+// ============================================================================
+
+float readLoadCellFast(
+  MaterialFeed &m,
+  uint8_t samples = 1
+) {
+
+  if (!m.hxReady) {
+
+    return (
+      m.lastWeight < 0.0f
+    )
+    ? 0.0f
+    : m.lastWeight;
+  }
+
+  if (
+    m.loadCell.is_ready()
+  ) {
+
+    float w =
+      m.loadCell.get_units(samples);
+
+    if (w < 0.5f) {
+      w = 0.0f;
+    }
+
+    return w;
+  }
+
+  return (
+    m.lastWeight < 0.0f
+  )
+  ? 0.0f
+  : m.lastWeight;
+}
+
+// ============================================================================
+// PUBLISH MATERIAL VALUES
+// ============================================================================
+
+void publishAllMaterials() {
+
+  StaticJsonDocument<256> doc;
+
+  doc["type"] = "materials";
+
+  JsonObject values =
+    doc.createNestedObject("values");
+
+  for (
+    uint8_t i = 0;
+    i < NUM_MATERIALS;
+    i++
+  ) {
+
+    float w =
+      readLoadCellFast(
+        materials[i],
+        1
+      );
+
+    if (w < 0.0f) {
+      w = 0.0f;
+    }
+
+    materials[i].lastWeight = w;
+
+    values[
+      materials[i].item_id
+    ] = w;
+  }
+
+  doc["unit"] = "g";
+
+  char payload[256];
+
+  serializeJson(
+    doc,
+    payload
+  );
+
+  mqtt.publish(
+    valuesTopic().c_str(),
+    payload
+  );
+}
+
+// ============================================================================
+// PUBLISH SINGLE VALUE
+// ============================================================================
+
+void publishValue(
+  const char *item_id,
+  float value,
+  const char *unit
+) {
+
+  if (value < 0.0f) {
+    value = 0.0f;
+  }
+
+  StaticJsonDocument<128> doc;
+
+  doc["type"] = "material";
+  doc["material"] = item_id;
+  doc["value"] = value;
+  doc["unit"] = unit;
+
+  char payload[192];
+
+  serializeJson(
+    doc,
+    payload
+  );
+
+  mqtt.publish(
+    valuesTopic().c_str(),
+    payload
+  );
+}
+
+// ============================================================================
+// ACTUATOR STATE
+// ============================================================================
+
+void publishAllActuators() {
+
+  StaticJsonDocument<256> doc;
+
+  doc["type"] = "actuators";
+
+  JsonObject values =
+    doc.createNestedObject("values");
+
+  values["lime_stone"] =
+    limeStoneGateOpen
+      ? "open"
+      : "close";
+
+  char payload[256];
+
+  serializeJson(
+    doc,
+    payload
+  );
+
+  mqtt.publish(
+    actuatorStateTopic().c_str(),
+    payload,
+    true
+  );
+}
+
+// ============================================================================
+// LIME STONE GATE
+// ============================================================================
+
+void setLimeStoneGate(bool open) {
+
+  limeStoneGateOpen = open;
+
+  limeStoneGate.write(
+    open
+      ? SERVO_MAX_ANGLE
+      : SERVO_HOME_ANGLE
+  );
+
+  Serial.printf(
+    "[LIME STONE GATE] %s -> %d degrees\n",
+    open ? "OPEN" : "CLOSE",
+    open
+      ? SERVO_MAX_ANGLE
+      : SERVO_HOME_ANGLE
+  );
+
+  publishAllActuators();
+}
+
+// ============================================================================
+// DISPENSING STATUS
+// ============================================================================
+
+void publishTargetStatus(
+  MaterialFeed &m,
+  const char *status
+) {
+
+  StaticJsonDocument<128> doc;
+
+  doc["type"] = "material";
+  doc["material"] = m.item_id;
+  doc["target"] = m.targetGrams;
+  doc["status"] = status;
+
+  char payload[192];
+
+  serializeJson(
+    doc,
+    payload
+  );
+
+  mqtt.publish(
+    statusTopic().c_str(),
+    payload
+  );
+}
+
+// ============================================================================
+// START DISPENSING
+// ============================================================================
+
+void startDispense(
+  MaterialFeed &m,
+  float target
+) {
+
+  if (!m.hxReady) {
+
+    Serial.printf(
+      "[DISPENSE BLOCKED] %s load cell not ready\n",
+      m.item_id
+    );
+
+    return;
+  }
+
+  float currentWeight =
+    readLoadCellFast(
+      m,
+      1
+    );
+
+  if (currentWeight < 0.0f) {
+    currentWeight = 0.0f;
+  }
+
+  m.targetGrams =
+    currentWeight + target;
+
+  m.dispensing = true;
+
+  m.servo.write(
+    SERVO_MAX_ANGLE
+  );
+
+  Serial.printf(
+    "[DISPENSE START] %s | Current: %.1fg | Add: %.1fg | Target: %.1fg\n",
+    m.item_id,
+    currentWeight,
+    target,
+    m.targetGrams
+  );
+
+  publishTargetStatus(
+    m,
+    "dispensing"
+  );
+}
+
+// ============================================================================
+// STOP DISPENSING
+// ============================================================================
+
+void stopDispense(
+  MaterialFeed &m
+) {
+
+  m.dispensing = false;
+
+  m.servo.write(
+    SERVO_HOME_ANGLE
+  );
+
+  Serial.printf(
+    "[DISPENSE STOP] %s | Current %.1fg | Target %.1fg\n",
+    m.item_id,
+    m.lastWeight,
+    m.targetGrams
+  );
+
+  publishTargetStatus(
+    m,
+    "done"
+  );
+
+  publishAllMaterials();
+}
+
+// ============================================================================
+// FAST DISPENSING CHECK
+// ============================================================================
+
+void checkDispensingFast() {
+
+  for (
+    uint8_t i = 0;
+    i < NUM_MATERIALS;
+    i++
+  ) {
+
+    MaterialFeed &m =
+      materials[i];
+
+    if (m.dispensing) {
+
+      if (
+        m.loadCell.is_ready()
+      ) {
+
+        m.lastWeight =
+          readLoadCellFast(
+            m,
+            1
+          );
+
+        publishAllMaterials();
+
+        Serial.printf(
+          "[DISPENSING FAST] %s: %.1fg / %.1fg\n",
+          m.item_id,
+          m.lastWeight,
+          m.targetGrams
+        );
+
+        if (
+          m.lastWeight >=
+          m.targetGrams
+        ) {
+
+          stopDispense(m);
+        }
+      }
+    }
+  }
+}
+
+// ============================================================================
+// TELEMETRY
+// ============================================================================
+
+void readAndPublishTelemetry() {
+
+  publishAllMaterials();
+}
+
+// ============================================================================
+// HX711 RETRY / TARE
+// ============================================================================
+
+void serviceTaring() {
+
+  unsigned long now =
+    millis();
+
+  for (
+    uint8_t i = 0;
+    i < NUM_MATERIALS;
+    i++
+  ) {
+
+    MaterialFeed &m =
+      materials[i];
+
+    if (!m.hxReady) {
+
+      if (
+        now -
+        m.lastInitAttemptMs >=
+        HX711_RETRY_INTERVAL_MS
+      ) {
+
+        m.lastInitAttemptMs =
+          now;
+
+        beginLoadCellWithTimeout(
+          m,
+          500UL
+        );
+      }
+
+      continue;
+    }
+
+    if (
+      !m.tared &&
+      m.loadCell.is_ready()
+    ) {
+
+      m.loadCell.tare();
+
+      m.tared = true;
+
+      Serial.printf(
+        "[TARE] %s tared and ready!\n",
+        m.item_id
+      );
+    }
+  }
+}
+
+// ============================================================================
+// FIRMWARE VERSION
+// ============================================================================
+
+void publishFwVersion() {
+
+  StaticJsonDocument<128> doc;
+
+  doc["title"] =
+    FIRMWARE_TITLE;
+
+  doc["version"] =
+    FIRMWARE_VERSION;
+
+  char payload[128];
+
+  serializeJson(
+    doc,
+    payload
+  );
+
+  mqtt.publish(
+    "plant/cement-dubai/esp1/version",
+    payload,
+    true
+  );
+
+  StaticJsonDocument<192> tbDoc;
+
+  tbDoc["current_fw_title"] =
+    FIRMWARE_TITLE;
+
+  tbDoc["current_fw_version"] =
+    FIRMWARE_VERSION;
+
+  tbDoc["fw_state"] =
+    "UPDATED";
+
+  char tbPayload[192];
+
+  serializeJson(
+    tbDoc,
+    tbPayload
+  );
+
+  mqtt.publish(
+    "v1/devices/me/telemetry",
+    tbPayload
+  );
+}
+
+// ============================================================================
+// OTA STATUS
+// ============================================================================
+
+void publishOtaStatus(
+  const char *tbState,
+  int progress,
+  const char *msg
+) {
+
+  StaticJsonDocument<256> doc;
+
+  doc["title"] =
+    FIRMWARE_TITLE;
+
+  doc["version"] =
+    FIRMWARE_VERSION;
+
+  doc["status"] =
+    tbState;
+
+  doc["progress"] =
+    progress;
+
+  doc["message"] =
+    msg;
+
+  char payload[256];
+
+  serializeJson(
+    doc,
+    payload
+  );
+
+  mqtt.publish(
+    "plant/cement-dubai/esp1/ota/status",
+    payload,
+    true
+  );
+
+  StaticJsonDocument<256> tbDoc;
+
+  tbDoc["current_fw_title"] =
+    FIRMWARE_TITLE;
+
+  tbDoc["current_fw_version"] =
+    FIRMWARE_VERSION;
+
+  tbDoc["fw_state"] =
+    tbState;
+
+  tbDoc["fw_progress"] =
+    progress;
+
+  tbDoc["fw_message"] =
+    msg;
+
+  char tbPayload[256];
+
+  serializeJson(
+    tbDoc,
+    tbPayload
+  );
+
+  mqtt.publish(
+    "v1/devices/me/telemetry",
+    tbPayload
+  );
+}
+
+// ============================================================================
+// SAFETY STOP
+// ============================================================================
+
+void stopActuatorsSafely() {
+
+  setLimeStoneGate(false);
+
+  for (
+    uint8_t i = 0;
+    i < NUM_MATERIALS;
+    i++
+  ) {
+
+    materials[i].dispensing =
+      false;
+
+    materials[i].servo.write(
+      SERVO_HOME_ANGLE
+    );
+  }
+
+  mqtt.publish(
+    statusTopic().c_str(),
+    "{\"type\":\"material\",\"material\":\"all\",\"status\":\"done\"}"
+  );
+
+  Serial.println(
+    "[SAFETY] All ESP1 actuators stopped."
+  );
+}
+
+// ============================================================================
+// REBOOT
+// ============================================================================
+
+void performReboot() {
+
+  Serial.println(
+    "[SYSTEM] Remote reboot requested."
+  );
+
+  stopActuatorsSafely();
+
+  mqtt.publish(
+    "plant/cement-dubai/esp1/status",
+    "{\"value\":\"rebooting\"}",
+    true
+  );
+
+  mqtt.loop();
+
+  delay(500);
+
+  ESP.restart();
+}
+
+// ============================================================================
+// OTA
+// ============================================================================
+
+void performOTA(
+  const char *url = "",
+  const char *checksum = "",
+  const char *newVersion = ""
+) {
+
+  Serial.printf(
+    "[OTA] URL: %s | Checksum: %s | Version: %s\n",
+    url,
+    checksum,
+    newVersion
+  );
+
+  stopActuatorsSafely();
+
+  publishOtaStatus(
+    "INITIATED",
+    0,
+    "Actuators secured. Starting OTA."
+  );
+
+  delay(300);
+
+  publishOtaStatus(
+    "DOWNLOADING",
+    5,
+    "Downloading firmware..."
+  );
+
+  if (
+    strlen(checksum) == 32
+  ) {
+
+    httpUpdate.setMD5sum(
+      checksum
+    );
+  }
+
+  httpUpdate.onStart(
+    []() {
+
+      Serial.println(
+        "[OTA] Flash process started."
+      );
+    }
+  );
+
+  httpUpdate.onEnd(
+    []() {
+
+      Serial.println(
+        "[OTA] Download completed."
+      );
+    }
+  );
+
+  httpUpdate.onProgress(
+    [](int cur, int total) {
+
+      int pct =
+        (total > 0)
+        ? (cur * 100) / total
+        : 0;
+
+      Serial.printf(
+        "[OTA] Progress: %d%%\n",
+        pct
+      );
+    }
+  );
+
+  String downloadUrl =
+    String(url);
+
+  if (
+    downloadUrl.length() == 0
+  ) {
+
+    downloadUrl =
+      String(TB_HTTP_BASE)
+      + "/api/v1/"
+      + String(TB_DEVICE_TOKEN)
+      + "/firmware?title="
+      + String(FIRMWARE_TITLE)
+      + "&version="
+      + String(newVersion);
+  }
+
+  Serial.printf(
+    "[OTA] Downloading: %s\n",
+    downloadUrl.c_str()
+  );
+
+  t_httpUpdate_return ret;
+
+  if (
+    downloadUrl.startsWith(
+      "https://"
+    )
+  ) {
+
+    WiFiClientSecure otaHttpsClient;
+
+    otaHttpsClient.setInsecure();
+
+    ret =
+      httpUpdate.update(
+        otaHttpsClient,
+        downloadUrl.c_str()
+      );
+
+  } else {
+
+    ret =
+      httpUpdate.update(
+        otaHttpClient,
+        downloadUrl.c_str()
+      );
+  }
+
+  switch (ret) {
+
+    case HTTP_UPDATE_FAILED: {
+
+      String errStr =
+        String(
+          httpUpdate.getLastErrorString()
+        );
+
+      Serial.printf(
+        "[OTA] Failed (%d): %s\n",
+        httpUpdate.getLastError(),
+        errStr.c_str()
+      );
+
+      publishOtaStatus(
+        "FAILED",
+        0,
+        errStr.c_str()
+      );
+
+      break;
+    }
+
+    case HTTP_UPDATE_NO_UPDATES:
+
+      Serial.println(
+        "[OTA] No update available."
+      );
+
+      publishOtaStatus(
+        "FAILED",
+        0,
+        "No firmware package found"
+      );
+
+      break;
+
+    case HTTP_UPDATE_OK:
+
+      Serial.println(
+        "[OTA] Firmware downloaded successfully."
+      );
+
+      publishOtaStatus(
+        "VERIFIED",
+        95,
+        "Firmware verified."
+      );
+
+      mqtt.loop();
+
+      delay(1000);
+
+      ESP.restart();
+
+      break;
+  }
+}
+
+// ============================================================================
+// FIND MATERIAL
+// ============================================================================
+
+MaterialFeed *materialForId(
+  const char *materialId
+) {
+
+  for (
+    uint8_t i = 0;
+    i < NUM_MATERIALS;
+    i++
+  ) {
+
+    if (
+      strcmp(
+        materialId,
+        materials[i].item_id
+      ) == 0
+    ) {
+
+      return &materials[i];
+    }
+  }
+
+  return nullptr;
+}
+
+// ============================================================================
+// MQTT CALLBACK
+// ============================================================================
+
+void mqttCallback(
+  char *topic,
+  byte *payload,
+  unsigned int length
+) {
+
+  Serial.printf(
+    "[MQTT RX] %s -> %.*s\n",
+    topic,
+    length,
+    (char *)payload
+  );
+
+  String topicStr(topic);
+
+  // Reboot
+  if (
+    topicStr ==
+      "plant/cement-dubai/esp1/cmd/reboot"
+    ||
+    topicStr ==
+      "plant/cement-dubai/cmd/reboot/all"
+  ) {
+
+    performReboot();
+
+    return;
+  }
+
+  // OTA
+  if (
+    topicStr ==
+      "plant/cement-dubai/esp1/ota/cmd"
+    ||
+    topicStr ==
+      "plant/cement-dubai/ota/cmd/all"
+  ) {
+
+    StaticJsonDocument<256> otaDoc;
+
+    DeserializationError err =
+      deserializeJson(
+        otaDoc,
+        payload,
+        length
+      );
+
+    if (!err) {
+
+      const char *url =
+        otaDoc["url"] | "";
+
+      const char *checksum =
+        otaDoc["checksum"] | "";
+
+      const char *ver =
+        otaDoc["version"] | "";
+
+      performOTA(
+        url,
+        checksum,
+        ver
+      );
+    }
+
+    return;
+  }
+
+  // ThingsBoard RPC
+  if (
+    topicStr.startsWith(
+      "v1/devices/me/rpc/request/"
+    )
+  ) {
+
+    StaticJsonDocument<256> rpcDoc;
+
+    DeserializationError err =
+      deserializeJson(
+        rpcDoc,
+        payload,
+        length
+      );
+
+    if (!err) {
+
+      const char *method =
+        rpcDoc["method"] | "";
+
+      if (
+        strcmp(
+          method,
+          "reboot"
+        ) == 0
+      ) {
+
+        performReboot();
+
+        return;
+      }
+
+      else if (
+        strcmp(
+          method,
+          "firmware_update"
+        ) == 0
+      ) {
+
+        const char *url =
+          rpcDoc["params"]["url"]
+          | rpcDoc["url"]
+          | "";
+
+        const char *checksum =
+          rpcDoc["params"]["checksum"]
+          | rpcDoc["checksum"]
+          | "";
+
+        const char *ver =
+          rpcDoc["params"]["version"]
+          | rpcDoc["version"]
+          | "";
+
+        performOTA(
+          url,
+          checksum,
+          ver
+        );
+
+        return;
+      }
+    }
+  }
+
+  // ThingsBoard Attributes
+  if (
+    topicStr ==
+      "v1/devices/me/attributes"
+    ||
+    topicStr.startsWith(
+      "v1/devices/me/attributes/response/"
+    )
+  ) {
+
+    StaticJsonDocument<512> attrDoc;
+
+    DeserializationError err =
+      deserializeJson(
+        attrDoc,
+        payload,
+        length
+      );
+
+    if (!err) {
+
+      const char *fwTitle =
+        attrDoc["fw_title"]
+        | attrDoc["target_fw_title"]
+        | "";
+
+      const char *fwVer =
+        attrDoc["fw_version"]
+        | attrDoc["target_fw_version"]
+        | "";
+
+      const char *fwChecksum =
+        attrDoc["fw_checksum"]
+        | attrDoc["target_fw_checksum"]
+        | "";
+
+      const char *fwUrl =
+        attrDoc["fw_url"]
+        | "";
+
+      if (
+        (
+          strcmp(
+            fwTitle,
+            FIRMWARE_TITLE
+          ) == 0
+          ||
+          strlen(fwTitle) == 0
+        )
+        &&
+        strlen(fwVer) > 0
+        &&
+        strcmp(
+          fwVer,
+          FIRMWARE_VERSION
+        ) != 0
+      ) {
+
+        performOTA(
+          fwUrl,
+          fwChecksum,
+          fwVer
+        );
+
+        return;
+      }
+    }
+  }
+
+  if (
+    topicStr != commandTopic()
+    &&
+    topicStr != actuatorCommandTopic()
+  ) {
+
+    return;
+  }
+
+  StaticJsonDocument<128> doc;
+
+  DeserializationError err =
+    deserializeJson(
+      doc,
+      payload,
+      length
+    );
+
+  if (err) {
+
+    Serial.printf(
+      "[MQTT] Bad JSON: %s\n",
+      err.c_str()
+    );
+
+    return;
+  }
+
+  // Lime stone gate
+  if (
+    topicStr ==
+      actuatorCommandTopic()
+  ) {
+
+    const char *actuatorId =
+      doc["actuator"] | "";
+
+    const char *command =
+      doc["command"] | "";
+
+    if (
+      strcmp(
+        actuatorId,
+        "lime_stone"
+      ) != 0
+    ) {
+
+      return;
+    }
+
+    if (
+      strcmp(
+        command,
+        "open"
+      ) == 0
+    ) {
+
+      setLimeStoneGate(true);
+    }
+
+    else if (
+      strcmp(
+        command,
+        "close"
+      ) == 0
+    ) {
+
+      setLimeStoneGate(false);
+    }
+
+    return;
+  }
+
+  // Material dispensing
+  const char *materialId =
+    doc["material"] | "";
+
+  const char *action =
+    doc["action"] | "target";
+
+  float target =
+    doc["target"] | -1.0f;
+
+  if (
+    strcmp(
+      action,
+      "target"
+    ) != 0
+    ||
+    target < 0
+  ) {
+
+    return;
+  }
+
+  MaterialFeed *m =
+    materialForId(
+      materialId
+    );
+
+  if (
+    m == nullptr
+  ) {
+
+    return;
+  }
+
+  startDispense(
+    *m,
+    target
+  );
+}
+
+// ============================================================================
+// MQTT CONNECT
+// ============================================================================
+
+bool mqttConnect() {
+
+  Serial.printf(
+    "[MQTT] Connecting to HiveMQ Cloud: %s:%u\n",
+    MQTT_BROKER_HOST,
+    MQTT_BROKER_PORT
+  );
+
+  String clientId =
+    String(MQTT_CLIENT_ID)
+    + "-"
+    + WiFi.macAddress();
+
+  const char *cid =
+    clientId.c_str();
+
+  const char *willTopic =
+    "plant/cement-dubai/esp1/status";
+
+  const char *willMsg =
+    "{\"value\":\"offline\"}";
+
+  uint8_t willQos = 1;
+
+  boolean willRetain = true;
+
+  bool ok =
+    strlen(MQTT_USER) > 0
+
+    ? mqtt.connect(
+        cid,
+        MQTT_USER,
+        MQTT_PASSWORD,
+        willTopic,
+        willQos,
+        willRetain,
+        willMsg
+      )
+
+    : mqtt.connect(
+        cid,
+        willTopic,
+        willQos,
+        willRetain,
+        willMsg
+      );
+
+  if (!ok) {
+
+    Serial.printf(
+      "[MQTT] Connection failed rc=%d\n",
+      mqtt.state()
+    );
+
+    return false;
+  }
+
+  Serial.println(
+    "[MQTT] Connected!"
+  );
+
+  mqtt.publish(
+    "plant/cement-dubai/esp1/status",
+    "{\"value\":\"online\"}",
+    true
+  );
+
+  publishOtaStatus(
+    "UPDATED",
+    100,
+    "Firmware is running"
+  );
+
+  publishFwVersion();
+
+  mqtt.subscribe(
+    commandTopic().c_str()
+  );
+
+  mqtt.subscribe(
+    actuatorCommandTopic().c_str()
+  );
+
+  mqtt.subscribe(
+    "plant/cement-dubai/esp1/ota/cmd"
+  );
+
+  mqtt.subscribe(
+    "plant/cement-dubai/ota/cmd/all"
+  );
+
+  mqtt.subscribe(
+    "plant/cement-dubai/esp1/cmd/reboot"
+  );
+
+  mqtt.subscribe(
+    "plant/cement-dubai/cmd/reboot/all"
+  );
+
+  mqtt.subscribe(
+    "v1/devices/me/attributes"
+  );
+
+  mqtt.subscribe(
+    "v1/devices/me/attributes/response/+"
+  );
+
+  mqtt.subscribe(
+    "v1/devices/me/rpc/request/+"
+  );
+
+  return true;
+}
+
+// ============================================================================
+// MAINTAIN MQTT
+// ============================================================================
+
+void maintainMqttConnection() {
+
+  if (
+    mqtt.connected()
+  ) {
+
+    return;
+  }
+
+  unsigned long now =
+    millis();
+
+  if (
+    now -
+    lastReconnectAttemptMs <
+    MQTT_RECONNECT_DELAY_MS
+  ) {
+
+    return;
+  }
+
+  lastReconnectAttemptMs =
+    now;
+
+  mqttConnect();
+}
+
+// ============================================================================
+// SETUP
+// ============================================================================
+
+void setup() {
+
+  Serial.begin(115200);
+
+  delay(1000);
+
+  Serial.println();
+  Serial.println("==========================================");
+  Serial.println("          ESP32-1 BOOTING");
+  Serial.println("==========================================");
+
+  esp_ota_mark_app_valid_cancel_rollback();
+
+  // ------------------------------------------------
+  // WIFI
+  // ------------------------------------------------
+
+  initWiFi();
+
+  // Allow HiveMQ TLS without CA certificate
+  espClient.setInsecure();
+
+  // ------------------------------------------------
+  // MQTT
+  // ------------------------------------------------
+
+  mqtt.setServer(
+    MQTT_BROKER_HOST,
+    MQTT_BROKER_PORT
+  );
+
+  mqtt.setCallback(
+    mqttCallback
+  );
+
+  if (
+    WiFi.status() == WL_CONNECTED
+  ) {
+
+    mqttConnect();
+  }
+
+  // ------------------------------------------------
+  // LIME STONE GATE
+  // ------------------------------------------------
+
+  limeStoneGate.attach(25);
+
+  setLimeStoneGate(false);
+
+  // ------------------------------------------------
+  // LOAD CELLS + SERVOS
+  // ------------------------------------------------
+
+  for (
+    uint8_t i = 0;
+    i < NUM_MATERIALS;
+    i++
+  ) {
+
+    MaterialFeed &m =
+      materials[i];
+
+    Serial.println();
+    Serial.printf(
+      "Initializing %s...\n",
+      m.item_id
+    );
+
+    Serial.printf(
+      "DOUT GPIO%d | Servo GPIO%d | SCK GPIO%d\n",
+      m.dout_pin,
+      m.servo_pin,
+      SHARED_SCK_PIN
+    );
+
+    m.servo.attach(
+      m.servo_pin
+    );
+
+    m.servo.write(
+      SERVO_HOME_ANGLE
+    );
+
+    m.lastInitAttemptMs =
+      millis();
+
+    beginLoadCellWithTimeout(
+      m
+    );
+  }
+
+  Serial.println();
+  Serial.println(
+    "Taring available load cells..."
+  );
+
+  delay(2000);
+
+  for (
+    uint8_t i = 0;
+    i < NUM_MATERIALS;
+    i++
+  ) {
+
+    MaterialFeed &m =
+      materials[i];
+
+    if (
+      m.hxReady
+    ) {
+
+      m.loadCell.tare();
+
+      m.tared = true;
+
+      Serial.printf(
+        "[TARE] %s ready!\n",
+        m.item_id
+      );
+
+    } else {
+
+      Serial.printf(
+        "[TARE] %s skipped. Will retry automatically.\n",
+        m.item_id
+      );
+    }
+  }
+
+  Serial.println();
+  Serial.println(
+    "=========================================="
+  );
+
+  Serial.println(
+    "          SETUP COMPLETE"
+  );
+
+  Serial.println(
+    "=========================================="
+  );
+}
+
+// ============================================================================
+// LOOP
+// ============================================================================
+
+void loop() {
+
+  // ------------------------------------------------
+  // WIFI
+  // ------------------------------------------------
+
+  if (
+    !reconnectWiFiIfNeeded()
+  ) {
+
+    delay(100);
+
+    return;
+  }
+
+  // ------------------------------------------------
+  // MQTT
+  // ------------------------------------------------
+
+  maintainMqttConnection();
+
+  if (
+    mqtt.connected()
+  ) {
+
+    mqtt.loop();
+  }
+
+  // ------------------------------------------------
+  // FAST DISPENSING CHECK
+  // ------------------------------------------------
+
+  checkDispensingFast();
+
+  // ------------------------------------------------
+  // TELEMETRY
+  // ------------------------------------------------
+
+  unsigned long now =
+    millis();
+
+  if (
+    now -
+    lastTelemetryMs >=
+    150UL
+  ) {
+
+    lastTelemetryMs =
+      now;
+
+    readAndPublishTelemetry();
+  }
+
+  // ------------------------------------------------
+  // HX711 RETRY / TARE
+  // ------------------------------------------------
+
+  serviceTaring();
+}
