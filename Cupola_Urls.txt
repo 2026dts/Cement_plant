@@ -1,0 +1,191 @@
+ESP-1
+
+1. Materials (Load Cells)
+
+Gypsum:
+http://10.10.12.65:4173/widget.html?id=gypsum
+
+Clay:
+http://10.10.12.65:4173/widget.html?id=clay
+
+Iron Ore:
+http://10.10.12.65:4173/widget.html?id=iron_ore
+
+Sand:
+http://10.10.12.65:4173/widget.html?id=sand
+
+
+Limestone Gate:
+
+OPEN:
+http://10.10.12.65:4173/control.html?id=lime_stone&action=open
+
+CLOSE:
+http://10.10.12.65:4173/control.html?id=lime_stone&action=close
+
+
+==================================================
+ESP-2
+==================================================
+
+2. Sensors (Environment & Vibration)
+
+Vibration Sensor:
+http://10.10.12.65:4173/widget.html?id=vibration_sensor
+
+Kiln Temperature:
+http://10.10.12.65:4173/widget.html?id=klin_dht_temp
+
+Kiln Humidity:
+http://10.10.12.65:4173/widget.html?id=klin_dht_humidity
+
+Cooler Temperature:
+http://10.10.12.65:4173/widget.html?id=cooler_dht_temp
+
+Cooler Humidity:
+http://10.10.12.65:4173/widget.html?id=cooler_dht_humidity
+
+Preheating Tower Temp:
+http://10.10.12.65:4173/widget.html?id=preheating_tower_dht_temp
+
+Preheating Tower Humidity:
+http://10.10.12.65:4173/widget.html?id=preheating_tower_dht_humidity
+
+
+==================================================
+CONTROLS
+==================================================
+
+Crusher:
+
+ON:
+http://10.10.12.65:4173/control.html?id=crusher&action=on
+
+OFF:
+http://10.10.12.65:4173/control.html?id=crusher&action=off
+
+
+Conveyor 1:
+
+ON:
+http://10.10.12.65:4173/control.html?id=conveyor_1&action=on
+
+OFF:
+http://10.10.12.65:4173/control.html?id=conveyor_1&action=off
+
+
+Conveyor 2:
+
+ON:
+http://10.10.12.65:4173/control.html?id=conveyor_2&action=on
+
+OFF:
+http://10.10.12.65:4173/control.html?id=conveyor_2&action=off
+
+
+Conveyor 3:
+
+ON:
+http://10.10.12.65:4173/control.html?id=conveyor_3&action=on
+
+OFF:
+http://10.10.12.65:4173/control.html?id=conveyor_3&action=off
+
+
+Conveyor 4:
+
+ON:
+http://10.10.12.65:4173/control.html?id=conveyor_4&action=on
+
+OFF:
+http://10.10.12.65:4173/control.html?id=conveyor_4&action=off
+
+
+Kiln:
+
+ON:
+http://10.10.12.65:4173/control.html?id=klin&action=on
+
+OFF:
+http://10.10.12.65:4173/control.html?id=klin&action=off
+
+
+Kiln Heater:
+
+ON:
+http://10.10.12.65:4173/control.html?id=klin_heater&action=on
+
+OFF:
+http://10.10.12.65:4173/control.html?id=klin_heater&action=off
+
+
+Heat Blower:
+
+ON:
+http://10.10.12.65:4173/control.html?id=heat_blower&action=on
+
+OFF:
+http://10.10.12.65:4173/control.html?id=heat_blower&action=off
+
+
+Preheating Tower Fan:
+
+ON:
+http://10.10.12.65:4173/control.html?id=preheating_tower_fan&action=on
+
+OFF:
+http://10.10.12.65:4173/control.html?id=preheating_tower_fan&action=off
+
+
+Preheating Tower Heater:
+
+ON:
+http://10.10.12.65:4173/control.html?id=preheating_tower_heater&action=on
+
+OFF:
+http://10.10.12.65:4173/control.html?id=preheating_tower_heater&action=off
+
+
+Vibration Motor:
+
+ON:
+http://10.10.12.65:4173/control.html?id=vibration_motor&action=on
+
+OFF:
+http://10.10.12.65:4173/control.html?id=vibration_motor&action=off
+
+
+Ball Mill 1:
+
+ON:
+http://10.10.12.65:4173/control.html?id=ball_mill_1&action=on
+
+OFF:
+http://10.10.12.65:4173/control.html?id=ball_mill_1&action=off
+
+
+Ball Mill 2:
+
+ON:
+http://10.10.12.65:4173/control.html?id=ball_mill_2&action=on
+
+OFF:
+http://10.10.12.65:4173/control.html?id=ball_mill_2&action=off
+
+
+Inline Url' For Control the actuators:
+
+http://10.10.12.65:4173/control.html?id=crusher
+http://10.10.12.65:4173/control.html?id=conveyor_1
+http://10.10.12.65:4173/control.html?id=conveyor_2
+http://10.10.12.65:4173/control.html?id=conveyor_3
+http://10.10.12.65:4173/control.html?id=conveyor_4
+http://10.10.12.65:4173/control.html?id=klin
+http://10.10.12.65:4173/control.html?id=klin_heater
+http://10.10.12.65:4173/control.html?id=heat_blower
+http://10.10.12.65:4173/control.html?id=preheating_tower_fan
+http://10.10.12.65:4173/control.html?id=preheating_tower_heater
+http://10.10.12.65:4173/control.html?id=vibration_motor
+http://10.10.12.65:4173/control.html?id=ball_mill_1
+http://10.10.12.65:4173/control.html?id=ball_mill_2
+http://10.10.12.65:4173/control.html?id=lime_stone
